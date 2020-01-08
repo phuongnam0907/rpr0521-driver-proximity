@@ -48,9 +48,8 @@
 #ifdef CONFIG_OF
 #include <linux/of_gpio.h>
 #endif
-#include "linux/rpr0521.h"
 
-#define DRIVER_VERSION  "0.1.3"
+#define DRIVER_VERSION  "0.1.4"
 
 /* Driver Settings */
 #define CONFIG_RPR_PS_ALS_USE_CHANGE_THRESHOLD
@@ -221,6 +220,18 @@ struct data_filter {
 	int sum;
 	int number;
 	int idx;
+};
+
+struct rpr0521_platform_data {
+	uint8_t state_reg;
+	uint8_t psctrl_reg;
+	uint8_t alsctrl_reg;
+	uint16_t ps_thd_h;
+	uint16_t ps_thd_l;
+	int int_pin;
+	uint32_t transmittance;
+	uint32_t int_flags;
+	bool use_fir;
 };
 
 struct rpr0521_data {
