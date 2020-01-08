@@ -2,9 +2,9 @@
 
 http://rohmfs.rohm.com/en/products/databook/datasheet/opto/optical_sensor/opto_module/rpr-0521rs-e.pdf
 
+1. 
 
-
-
+```
 &i2c_1 {
 	rpr0521@38 {
 		compatible = "yellowfin3,rpr0521";
@@ -17,10 +17,10 @@ http://rohmfs.rohm.com/en/products/databook/datasheet/opto/optical_sensor/opto_m
 	};
 };
 
+```
+2. 
 
-
-
-
+```
 config RPR_0521RS
 	tristate "ROHM RPR0521 ALS and proximity sensor driver"
 	depends on I2C
@@ -32,13 +32,14 @@ config RPR_0521RS
 
 	  To compile this driver as a module, choose M here:
 	  the module will be called rpr0521.
+```
+3. 
 
 
-
-
-
+```
 obj-$(CONFIG_RPR_0521RS)	+= rpr0521.o
-
-
-
+```
+4. 
+```
 CONFIG_RPR_0521RS=y
+```
