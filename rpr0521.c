@@ -916,18 +916,18 @@ static ssize_t rpr0521_ps_distance_show(struct device *dev, struct device_attrib
 	return scnprintf(buf, PAGE_SIZE, "%d\n", pdata->distanceValue);
 }
 
-static irqreturn_t rpr0521_irq(int irq, void *dev_id)
-{
-	struct i2c_client *client = dev_id;
-	struct rpr0521_data *rpr0521 = i2c_get_clientdata(client);
+// static irqreturn_t rpr0521_irq(int irq, void *dev_id)
+// {
+// 	struct i2c_client *client = dev_id;
+// 	struct rpr0521_data *rpr0521 = i2c_get_clientdata(client);
 
-	pdata->distanceValue = rpr0521_read_distance(rpr0521);
-	// dev_err(&pdata->client->dev, "RPR0521 -- DEBUG -- val = %d\n", pdata->distanceValue);
+// 	pdata->distanceValue = rpr0521_read_distance(rpr0521);
+// 	// dev_err(&pdata->client->dev, "RPR0521 -- DEBUG -- val = %d\n", pdata->distanceValue);
 
-	schedule_work(&rpr0521->work);
+// 	schedule_work(&rpr0521->work);
 
-	return IRQ_HANDLED;
-}
+// 	return IRQ_HANDLED;
+// }
 
 
 
