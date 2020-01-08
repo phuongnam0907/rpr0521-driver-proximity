@@ -1,24 +1,40 @@
 # rpr0521-driver-proximity
 
-http://rohmfs.rohm.com/en/products/databook/datasheet/opto/optical_sensor/opto_module/rpr-0521rs-e.pdf
+[Datasheet RPR0521-RS](http://rohmfs.rohm.com/en/products/databook/datasheet/opto/optical_sensor/opto_module/rpr-0521rs-e.pdf)
 
-1. 
+[Datasheet STK3X1X](http://pro0fc108.hkpic1.websiteonline.cn/upload/hc7r.pdf)
+
+
+* <b>Proximity:</b> <i>rpr0521_proximity.c</i>
+* <b>Ammient Light:</b> <i>...</i>
+
+1. Device tree
 
 ```
 &i2c_1 {
-	rpr0521@38 {
+	rpr@38 {
 		compatible = "yellowfin3,rpr0521";
 		reg = <0x38>;
 		#address-cells = <2>;
 		#size-cells = <1>;
 		interrupt-parent = <&msm_gpio>;
 		interrupts = <93 0x2>;
-		gpio-irq-pin = <&msm_gpio 93 0x02>;
+		vdd-supply = <&pm8909_l17>;
+	  	vio-supply = <&pm8909_l6>;
+		rpr,irq-gpio = <&msm_gpio 94 0x02>;
+		rpr,transmittance = <500>;
+		rpr,state-reg = <0x03>;
+		rpr,psctrl-reg = <0x71>;
+		rpr,alsctrl-reg = <0x38>;
+		rpr,ps-thdh = <10000>; 
+		rpr,ps-thdl = <1500>;
+		rpr,use-fir;
 	};
 };
 
 ```
-2. 
+
+2. Kconfig
 
 ```
 config RPR_0521RS
@@ -33,13 +49,15 @@ config RPR_0521RS
 	  To compile this driver as a module, choose M here:
 	  the module will be called rpr0521.
 ```
-3. 
 
+3. Makefile
 
 ```
 obj-$(CONFIG_RPR_0521RS)	+= rpr0521.o
 ```
-4. 
+
+4. Defconfig
+
 ```
 CONFIG_RPR_0521RS=y
 ```
