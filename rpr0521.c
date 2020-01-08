@@ -464,93 +464,93 @@ static inline bool rpr0521_is_triggered(struct rpr0521_data *data)
 }
 
 /* IRQ to trigger handler */
-// static irqreturn_t rpr0521_drdy_irq_handler(int irq, void *private)
-// {
-// 	struct iio_dev *indio_dev = private;
-// 	struct rpr0521_data *data = iio_priv(indio_dev);
+static irqreturn_t rpr0521_drdy_irq_handler(int irq, void *private)
+{
+	struct iio_dev *indio_dev = private;
+	struct rpr0521_data *data = iio_priv(indio_dev);
 
-// 	data->irq_timestamp = iio_get_time_ns();
-// 	/*
-// 	 * We need to wake the thread to read the interrupt reg. It
-// 	 * is not possible to do that here because regmap_read takes a
-// 	 * mutex.
-// 	 */
+	data->irq_timestamp = iio_get_time_ns();
+	/*
+	 * We need to wake the thread to read the interrupt reg. It
+	 * is not possible to do that here because regmap_read takes a
+	 * mutex.
+	 */
 
-// 	return IRQ_WAKE_THREAD;
-// }
+	return IRQ_WAKE_THREAD;
+}
 
-// static irqreturn_t rpr0521_drdy_irq_thread(int irq, void *private)
-// {
-// 	struct iio_dev *indio_dev = private;
-// 	struct rpr0521_data *data = iio_priv(indio_dev);
+static irqreturn_t rpr0521_drdy_irq_thread(int irq, void *private)
+{
+	struct iio_dev *indio_dev = private;
+	struct rpr0521_data *data = iio_priv(indio_dev);
 
-// 	if (rpr0521_is_triggered(data)) {
-// 		iio_trigger_poll_chained(data->drdy_trigger0, iio_get_time_ns());
-// 		return IRQ_HANDLED;
-// 	}
+	if (rpr0521_is_triggered(data)) {
+		iio_trigger_poll_chained(data->drdy_trigger0, iio_get_time_ns());
+		return IRQ_HANDLED;
+	}
 
-// 	return IRQ_NONE;
-// }
+	return IRQ_NONE;
+}
 
-// static bool iio_trigger_using_own(struct iio_dev *indio_dev)
-// {
-// 	return true;
-// }
+static bool iio_trigger_using_own(struct iio_dev *indio_dev)
+{
+	return true;
+}
 
-// static irqreturn_t rpr0521_trigger_consumer_store_time(int irq, void *p)
-// {
-// 	struct iio_poll_func *pf = p;
-// 	struct iio_dev *indio_dev = pf->indio_dev;
+static irqreturn_t rpr0521_trigger_consumer_store_time(int irq, void *p)
+{
+	struct iio_poll_func *pf = p;
+	struct iio_dev *indio_dev = pf->indio_dev;
 
-// 	/* Other trigger polls store time here. */
-// 	if (!iio_trigger_using_own(indio_dev))
-// 		pf->timestamp = iio_get_time_ns();
+	/* Other trigger polls store time here. */
+	if (!iio_trigger_using_own(indio_dev))
+		pf->timestamp = iio_get_time_ns();
 
-// 	return IRQ_WAKE_THREAD;
-// }
+	return IRQ_WAKE_THREAD;
+}
 
-// static inline int iio_push_to_buffers_with_timestamp(struct iio_dev *indio_dev,
-// 	void *data, int64_t timestamp)
-// {
-// 	if (indio_dev->scan_timestamp) {
-// 		size_t ts_offset = indio_dev->scan_bytes / sizeof(int64_t) - 1;
-// 		((int64_t *)data)[ts_offset] = timestamp;
-// 	}
+static inline int iio_push_to_buffers_with_timestamp(struct iio_dev *indio_dev,
+	void *data, int64_t timestamp)
+{
+	if (indio_dev->scan_timestamp) {
+		size_t ts_offset = indio_dev->scan_bytes / sizeof(int64_t) - 1;
+		((int64_t *)data)[ts_offset] = timestamp;
+	}
 
-// 	return iio_push_to_buffers(indio_dev, data);
-// }
+	return iio_push_to_buffers(indio_dev, data);
+}
 
-// static irqreturn_t rpr0521_trigger_consumer_handler(int irq, void *p)
-// {
-// 	struct iio_poll_func *pf = p;
-// 	struct iio_dev *indio_dev = pf->indio_dev;
-// 	struct rpr0521_data *data = iio_priv(indio_dev);
-// 	int err;
+static irqreturn_t rpr0521_trigger_consumer_handler(int irq, void *p)
+{
+	struct iio_poll_func *pf = p;
+	struct iio_dev *indio_dev = pf->indio_dev;
+	struct rpr0521_data *data = iio_priv(indio_dev);
+	int err;
 
-// 	u8 buffer[16]; /* 3 16-bit channels + padding + ts */
+	u8 buffer[16]; /* 3 16-bit channels + padding + ts */
 
-// 	/* Use irq timestamp when reasonable. */
-// 	if (iio_trigger_using_own(indio_dev) && data->irq_timestamp) {
-// 		pf->timestamp = data->irq_timestamp;
-// 		data->irq_timestamp = 0;
-// 	}
-// 	/* Other chained trigger polls get timestamp only here. */
-// 	if (!pf->timestamp)
-// 		pf->timestamp = iio_get_time_ns();
+	/* Use irq timestamp when reasonable. */
+	if (iio_trigger_using_own(indio_dev) && data->irq_timestamp) {
+		pf->timestamp = data->irq_timestamp;
+		data->irq_timestamp = 0;
+	}
+	/* Other chained trigger polls get timestamp only here. */
+	if (!pf->timestamp)
+		pf->timestamp = iio_get_time_ns();
 
-// 	err = regmap_bulk_read(data->regmap, RPR0521_REG_PXS_DATA,
-// 		&buffer,
-// 		(3 * 2) + 1);	/* 3 * 16-bit + (discarded) int clear reg. */
-// 	if (!err)
-// 		iio_push_to_buffers_with_timestamp(indio_dev, buffer, pf->timestamp);
-// 	else
-// 		dev_err(&data->client->dev, "Trigger consumer can't read from sensor.\n");
-// 	pf->timestamp = 0;
+	err = regmap_bulk_read(data->regmap, RPR0521_REG_PXS_DATA,
+		&buffer,
+		(3 * 2) + 1);	/* 3 * 16-bit + (discarded) int clear reg. */
+	if (!err)
+		iio_push_to_buffers_with_timestamp(indio_dev, buffer, pf->timestamp);
+	else
+		dev_err(&data->client->dev, "Trigger consumer can't read from sensor.\n");
+	pf->timestamp = 0;
 
-// 	iio_trigger_notify_done(indio_dev->trig);
+	iio_trigger_notify_done(indio_dev->trig);
 
-// 	return IRQ_HANDLED;
-// }
+	return IRQ_HANDLED;
+}
 
 static int rpr0521_write_int_enable(struct rpr0521_data *data)
 {
@@ -1723,59 +1723,59 @@ static int rpr0521_probe(struct i2c_client *client,
 	/* IRQ to trigger setup */
 	if (client->irq) {
 		/* Trigger0 producer setup */
-		// data->drdy_trigger0 = iio_trigger_alloc(
-		// 	"%s-dev%d", indio_dev->name, indio_dev->id);
-		// if (!data->drdy_trigger0) {
-		// 	ret = -ENOMEM;
-		// 	goto err_pm_disable;
-		// }
-		// data->drdy_trigger0->dev.parent = indio_dev->dev.parent;
-		// data->drdy_trigger0->ops = &rpr0521_trigger_ops;
-		// indio_dev->available_scan_masks = rpr0521_available_scan_masks;
-		// iio_trigger_set_drvdata(data->drdy_trigger0, indio_dev);
+		data->drdy_trigger0 = iio_trigger_alloc(
+			"%s-dev%d", indio_dev->name, indio_dev->id);
+		if (!data->drdy_trigger0) {
+			ret = -ENOMEM;
+			goto err_pm_disable;
+		}
+		data->drdy_trigger0->dev.parent = indio_dev->dev.parent;
+		data->drdy_trigger0->ops = &rpr0521_trigger_ops;
+		indio_dev->available_scan_masks = rpr0521_available_scan_masks;
+		iio_trigger_set_drvdata(data->drdy_trigger0, indio_dev);
 
 /* ========================= NEW ADDING ========================= */
 
-		ret = devm_request_irq(&client->dev, client->irq, rpr0521_irq, 0,
-		                  RPR0521_IRQ_NAME, client);
-		if (ret) {
-			dev_err(&client->dev, "unable to request IRQ\n");
-			return ret;
-		}
+		// ret = devm_request_irq(&client->dev, client->irq, rpr0521_irq, 0,
+		//                   RPR0521_IRQ_NAME, client);
+		// if (ret) {
+		// 	dev_err(&client->dev, "unable to request IRQ\n");
+		// 	return ret;
+		// }
 
 /* ========================= END ADDING ========================= */
 
 		/* Ties irq to trigger producer handler. */
-		// ret = devm_request_threaded_irq(&client->dev, client->irq,
-		// 	rpr0521_drdy_irq_handler, rpr0521_drdy_irq_thread,
-		// 	IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
-		// 	RPR0521_IRQ_NAME, indio_dev);
-		// if (ret < 0) {
-		// 	dev_err(&client->dev, "request irq %d for trigger0 failed\n",
-		// 		client->irq);
-		// 	goto err_pm_disable;
-		// 	}
+		ret = devm_request_threaded_irq(&client->dev, client->irq,
+			rpr0521_drdy_irq_handler, rpr0521_drdy_irq_thread,
+			IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+			RPR0521_IRQ_NAME, indio_dev);
+		if (ret < 0) {
+			dev_err(&client->dev, "request irq %d for trigger0 failed\n",
+				client->irq);
+			goto err_pm_disable;
+			}
 
-		// ret = iio_trigger_register(data->drdy_trigger0);
-		// if (ret) {
-		// 	dev_err(&client->dev, "iio trigger register failed\n");
-		// 	goto err_pm_disable;
-		// }
+		ret = iio_trigger_register(data->drdy_trigger0);
+		if (ret) {
+			dev_err(&client->dev, "iio trigger register failed\n");
+			goto err_pm_disable;
+		}
 
-		// /*
-		//  * Now whole pipe from physical interrupt (irq defined by
-		//  * devicetree to device) to trigger0 output is set up.
-		//  */
+		/*
+		 * Now whole pipe from physical interrupt (irq defined by
+		 * devicetree to device) to trigger0 output is set up.
+		 */
 
-		// /* Trigger consumer setup */
-		// ret = iio_triggered_buffer_setup(indio_dev,
-		// 	rpr0521_trigger_consumer_store_time,
-		// 	rpr0521_trigger_consumer_handler,
-		// 	&rpr0521_buffer_setup_ops);
-		// if (ret < 0) {
-		// 	dev_err(&client->dev, "iio triggered buffer setup failed\n");
-		// 	goto err_pm_disable;
-		// }
+		/* Trigger consumer setup */
+		ret = iio_triggered_buffer_setup(indio_dev,
+			rpr0521_trigger_consumer_store_time,
+			rpr0521_trigger_consumer_handler,
+			&rpr0521_buffer_setup_ops);
+		if (ret < 0) {
+			dev_err(&client->dev, "iio triggered buffer setup failed\n");
+			goto err_pm_disable;
+		}
 	}
 
 	ret = iio_device_register(indio_dev);
