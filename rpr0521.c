@@ -940,12 +940,26 @@ static irqreturn_t rpr0521_irq(int irq, void *dev_id)
 
 static int32_t rpr0521_set_ps_thd_l(struct rpr0521_data *ps_data, uint16_t thd_l)
 {
-    return 1;
+    uint8_t temp;
+    uint8_t* pSrc = (uint8_t*)&thd_l;
+
+    temp = *pSrc;
+    *pSrc = *(pSrc+1);
+    *(pSrc+1) = temp;
+    ps_data->ps_thd_l = thd_l;
+	return i2c_smbus_write_word_data(ps_data->client,0x4B,thd_l);
 }
 
 static int32_t rpr0521_set_ps_thd_h(struct stk3x1x_data *ps_data, uint16_t thd_h)
 {
-    return 1;
+    uint8_t temp;
+    uint8_t* pSrc = (uint8_t*)&thd_h;
+
+    temp = *pSrc;
+    *pSrc = *(pSrc+1);
+    *(pSrc+1) = temp;
+    ps_data->ps_thd_h = thd_h;
+	return i2c_smbus_write_word_data(ps_data->client,0x4C,thd_h);
 }
 
 
