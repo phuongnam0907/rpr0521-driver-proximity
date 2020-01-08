@@ -933,9 +933,103 @@ static irqreturn_t rpr0521_irq(int irq, void *dev_id)
 
 
 
+static int rpr0521_device_ctl(struct rpr0521_data *ps_data, bool enable)
+{
+	int ret;
+	struct device *dev = &ps_data->client->dev;
 
+	if (enable && !ps_data->power_enabled) {
+		ret = rpr0521_power_ctl(ps_data, true);
+		if (ret) {
+			dev_err(dev, "Failed to enable device power\n");
+			goto err_exit;
+		}
+		ret = rpr0521_init_all_setting(ps_data->client, ps_data->pdata);
+		if (ret < 0) {
+			rpr0521_power_ctl(ps_data, false);
+			dev_err(dev, "Failed to re-init device setting\n");
+			goto err_exit;
+		}
+	} else if (!enable && ps_data->power_enabled) {
+		if (!ps_data->als_enabled && !ps_data->ps_enabled) {
+			ret = rpr0521_power_ctl(ps_data, false);
+			if (ret) {
+				dev_err(dev, "Failed to disable device power\n");
+				goto err_exit;
+			}
+		} else {
+			dev_dbg(dev, "device control: als_enabled=%d, ps_enabled=%d\n",
+				ps_data->als_enabled, ps_data->ps_enabled);
+		}
+	} else {
+		dev_dbg(dev, "device control: enable=%d, power_enabled=%d\n",
+			enable, ps_data->power_enabled);
+	}
+	return 0;
 
+err_exit:
+	return ret;
+}
 
+static int32_t rpr0521_enable_ps(struct rpr0521_data *ps_data, uint8_t enable)
+{
+    int32_t ret;
+	uint8_t w_state_reg;
+	uint8_t curr_ps_enable;
+	curr_ps_enable = ps_data->ps_enabled?1:0;
+	if(curr_ps_enable == enable)
+		return 0;
+
+	if (enable) {
+		ret = rpr0521_device_ctl(ps_data, enable);
+		if (ret)
+			return ret;
+	}
+
+    ret = i2c_smbus_read_byte_data(ps_data->client, STK_STATE_REG);
+    if (ret < 0)
+    {
+			printk(KERN_ERR "%s: write i2c error, ret=%d\n", __func__, ret);
+		return ret;
+    }
+	w_state_reg = ret;
+	w_state_reg &= ~(STK_STATE_EN_PS_MASK | STK_STATE_EN_WAIT_MASK | 0x60);
+	if(enable)
+	{
+		w_state_reg |= STK_STATE_EN_PS_MASK;
+		if(!(ps_data->als_enabled))
+			w_state_reg |= STK_STATE_EN_WAIT_MASK;
+	}
+    ret = i2c_smbus_write_byte_data(ps_data->client, STK_STATE_REG, w_state_reg);
+    if (ret < 0)
+	{
+		printk(KERN_ERR "%s: write i2c error, ret=%d\n", __func__, ret);
+		return ret;
+	}
+
+    if(enable)
+	{
+#ifdef STK_POLL_PS
+		hrtimer_start(&ps_data->ps_timer, ps_data->ps_poll_delay, HRTIMER_MODE_REL);
+		ps_data->ps_distance_last = -1;
+#endif
+		ps_data->ps_enabled = true;
+	}
+	else
+	{
+#ifdef STK_POLL_PS
+		hrtimer_cancel(&ps_data->ps_timer);
+#endif
+		ps_data->ps_enabled = false;
+	}
+	if (!enable) {
+		ret = rpr0521_device_ctl(ps_data, enable);
+		if (ret)
+			return ret;
+	}
+
+	return ret;
+}
 
 
 static int32_t rpr0521_set_ps_thd_l(struct rpr0521_data *ps_data, uint16_t thd_l)
@@ -950,7 +1044,7 @@ static int32_t rpr0521_set_ps_thd_l(struct rpr0521_data *ps_data, uint16_t thd_l
 	return i2c_smbus_write_word_data(ps_data->client,0x4B,thd_l);
 }
 
-static int32_t rpr0521_set_ps_thd_h(struct stk3x1x_data *ps_data, uint16_t thd_h)
+static int32_t rpr0521_set_ps_thd_h(struct rpr0521_data *ps_data, uint16_t thd_h)
 {
     uint8_t temp;
     uint8_t* pSrc = (uint8_t*)&thd_h;
