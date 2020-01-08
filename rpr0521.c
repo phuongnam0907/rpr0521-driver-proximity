@@ -933,543 +933,543 @@ static irqreturn_t rpr0521_irq(int irq, void *dev_id)
 
 
 
-static int rpr0521_device_ctl(struct rpr0521_data *ps_data, bool enable)
-{
-	int ret;
-	struct device *dev = &ps_data->client->dev;
-
-	if (enable && !ps_data->power_enabled) {
-		ret = rpr0521_power_ctl(ps_data, true);
-		if (ret) {
-			dev_err(dev, "Failed to enable device power\n");
-			goto err_exit;
-		}
-		ret = rpr0521_init_all_setting(ps_data->client, ps_data->pdata);
-		if (ret < 0) {
-			rpr0521_power_ctl(ps_data, false);
-			dev_err(dev, "Failed to re-init device setting\n");
-			goto err_exit;
-		}
-	} else if (!enable && ps_data->power_enabled) {
-		if (!ps_data->als_enabled && !ps_data->ps_enabled) {
-			ret = rpr0521_power_ctl(ps_data, false);
-			if (ret) {
-				dev_err(dev, "Failed to disable device power\n");
-				goto err_exit;
-			}
-		} else {
-			dev_dbg(dev, "device control: als_enabled=%d, ps_enabled=%d\n",
-				ps_data->als_enabled, ps_data->ps_enabled);
-		}
-	} else {
-		dev_dbg(dev, "device control: enable=%d, power_enabled=%d\n",
-			enable, ps_data->power_enabled);
-	}
-	return 0;
-
-err_exit:
-	return ret;
-}
-
-static int32_t rpr0521_enable_ps(struct rpr0521_data *ps_data, uint8_t enable)
-{
-    int32_t ret;
-	uint8_t w_state_reg;
-	uint8_t curr_ps_enable;
-	curr_ps_enable = ps_data->ps_enabled?1:0;
-	if(curr_ps_enable == enable)
-		return 0;
-
-	if (enable) {
-		ret = rpr0521_device_ctl(ps_data, enable);
-		if (ret)
-			return ret;
-	}
-
-    ret = i2c_smbus_read_byte_data(ps_data->client, STK_STATE_REG);
-    if (ret < 0)
-    {
-			printk(KERN_ERR "%s: write i2c error, ret=%d\n", __func__, ret);
-		return ret;
-    }
-	w_state_reg = ret;
-	w_state_reg &= ~(STK_STATE_EN_PS_MASK | STK_STATE_EN_WAIT_MASK | 0x60);
-	if(enable)
-	{
-		w_state_reg |= STK_STATE_EN_PS_MASK;
-		if(!(ps_data->als_enabled))
-			w_state_reg |= STK_STATE_EN_WAIT_MASK;
-	}
-    ret = i2c_smbus_write_byte_data(ps_data->client, STK_STATE_REG, w_state_reg);
-    if (ret < 0)
-	{
-		printk(KERN_ERR "%s: write i2c error, ret=%d\n", __func__, ret);
-		return ret;
-	}
-
-    if(enable)
-	{
-#ifdef STK_POLL_PS
-		hrtimer_start(&ps_data->ps_timer, ps_data->ps_poll_delay, HRTIMER_MODE_REL);
-		ps_data->ps_distance_last = -1;
-#endif
-		ps_data->ps_enabled = true;
-	}
-	else
-	{
-#ifdef STK_POLL_PS
-		hrtimer_cancel(&ps_data->ps_timer);
-#endif
-		ps_data->ps_enabled = false;
-	}
-	if (!enable) {
-		ret = rpr0521_device_ctl(ps_data, enable);
-		if (ret)
-			return ret;
-	}
-
-	return ret;
-}
-
-
-static int32_t rpr0521_set_ps_thd_l(struct rpr0521_data *ps_data, uint16_t thd_l)
-{
-    uint8_t temp;
-    uint8_t* pSrc = (uint8_t*)&thd_l;
-
-    temp = *pSrc;
-    *pSrc = *(pSrc+1);
-    *(pSrc+1) = temp;
-    ps_data->ps_thd_l = thd_l;
-	return i2c_smbus_write_word_data(ps_data->client,0x4B,thd_l);
-}
-
-static int32_t rpr0521_set_ps_thd_h(struct rpr0521_data *ps_data, uint16_t thd_h)
-{
-    uint8_t temp;
-    uint8_t* pSrc = (uint8_t*)&thd_h;
-
-    temp = *pSrc;
-    *pSrc = *(pSrc+1);
-    *(pSrc+1) = temp;
-    ps_data->ps_thd_h = thd_h;
-	return i2c_smbus_write_word_data(ps_data->client,0x4C,thd_h);
-}
-
-
-static inline uint32_t rpr0521_get_ps_reading(struct rpr0521_data *ps_data)
-{
-	int32_t word_data, tmp_word_data;
-
-	tmp_word_data = i2c_smbus_read_word_data(ps_data->client,0x44);
-	if(tmp_word_data < 0)
-	{
-		printk(KERN_ERR "%s fail, err=0x%x", __func__, tmp_word_data);
-		return tmp_word_data;
-	}
-	word_data = ((tmp_word_data & 0xFF00) >> 8) | ((tmp_word_data & 0x00FF) << 8) ;
-	return word_data;
-}
-
-static ssize_t rpr0521_ps_code_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
-    uint32_t reading;
-    reading = rpr0521_get_ps_reading(ps_data);
-    return scnprintf(buf, PAGE_SIZE, "%d\n", reading);
-}
-
-static int rpr0521_ps_enable_set(struct sensors_classdev *sensors_cdev,
-						unsigned int enabled)
-{
-	struct rpr0521_data *ps_data = container_of(sensors_cdev,
-						struct rpr0521_data, ps_cdev);
-	int err;
-
-	mutex_lock(&ps_data->io_lock);
-	err = rpr0521_enable_ps(ps_data, enabled);
-	mutex_unlock(&ps_data->io_lock);
-
-	if (err < 0)
-		return err;
-	return 0;
-}
-
-static ssize_t rpr0521_ps_enable_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-    int32_t enable, ret;
-	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
-
-    mutex_lock(&ps_data->io_lock);
-	enable = (ps_data->ps_enabled)?1:0;
-    mutex_unlock(&ps_data->io_lock);
-    ret = i2c_smbus_read_byte_data(ps_data->client,rpr0521_STATE_REG);
-    ret = (ret & rpr0521_STATE_EN_PS_MASK)?1:0;
-
-	if(enable != ret)
-		printk(KERN_ERR "%s: driver and sensor mismatch! driver_enable=0x%x, sensor_enable=%x\n", __func__, enable, ret);
-
-	return scnprintf(buf, PAGE_SIZE, "%d\n", ret);
-}
-
-static ssize_t rpr0521_ps_enable_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
-{
-	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
-	uint8_t en;
-	if (sysfs_streq(buf, "1"))
-		en = 1;
-	else if (sysfs_streq(buf, "0"))
-		en = 0;
-	else
-	{
-		printk(KERN_ERR "%s, invalid value %d\n", __func__, *buf);
-		return -EINVAL;
-	}
-	dev_dbg(dev, "%s: Enable PS : %d\n", __func__, en);
-    mutex_lock(&ps_data->io_lock);
-    rpr0521_enable_ps(ps_data, en);
-    mutex_unlock(&ps_data->io_lock);
-    return size;
-}
-
-static ssize_t rpr0521_ps_enable_aso_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-    int32_t ret;
-	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
-
-    ret = i2c_smbus_read_byte_data(ps_data->client,rpr0521_STATE_REG);
-    ret = (ret & rpr0521_STATE_EN_ASO_MASK)?1:0;
-
-	return scnprintf(buf, PAGE_SIZE, "%d\n", ret);
-}
-
-static ssize_t rpr0521_ps_enable_aso_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
-{
-	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
-	uint8_t en;
-    int32_t ret;
-	uint8_t w_state_reg;
-
-	if (sysfs_streq(buf, "1"))
-		en = 1;
-	else if (sysfs_streq(buf, "0"))
-		en = 0;
-	else
-	{
-		printk(KERN_ERR "%s, invalid value %d\n", __func__, *buf);
-		return -EINVAL;
-	}
-	dev_dbg(dev, "%s: Enable PS ASO : %d\n", __func__, en);
-
-    ret = i2c_smbus_read_byte_data(ps_data->client, rpr0521_STATE_REG);
-    if (ret < 0)
-    {
-        printk(KERN_ERR "%s: write i2c error\n", __func__);
-		return ret;
-    }
-	w_state_reg = (uint8_t)(ret & (~rpr0521_STATE_EN_ASO_MASK));
-	if(en)
-		w_state_reg |= rpr0521_STATE_EN_ASO_MASK;
-
-    ret = i2c_smbus_write_byte_data(ps_data->client, rpr0521_STATE_REG, w_state_reg);
-    if (ret < 0)
-	{
-		printk(KERN_ERR "%s: write i2c error\n", __func__);
-		return ret;
-	}
-
-	return size;
-}
-
-
-static ssize_t rpr0521_ps_offset_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
-    int32_t word_data, tmp_word_data;
-
-	tmp_word_data = i2c_smbus_read_word_data(ps_data->client, rpr0521_DATA1_OFFSET_REG);
-	if(tmp_word_data < 0)
-	{
-		printk(KERN_ERR "%s fail, err=0x%x", __func__, tmp_word_data);
-		return tmp_word_data;
-	}
-		word_data = ((tmp_word_data & 0xFF00) >> 8) | ((tmp_word_data & 0x00FF) << 8) ;
-	return scnprintf(buf, PAGE_SIZE, "%d\n", word_data);
-}
-
-static ssize_t rpr0521_ps_offset_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
-{
-	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
-	unsigned long value = 0;
-	int ret;
-	uint16_t offset;
-
-	ret = kstrtoul(buf, 10, &value);
-	if(ret < 0)
-	{
-		printk(KERN_ERR "%s:kstrtoul failed, ret=0x%x\n",
-			__func__, ret);
-		return ret;
-	}
-	if(value > 65535)
-	{
-		printk(KERN_ERR "%s: invalid value, offset=%ld\n", __func__, value);
-		return -EINVAL;
-	}
-
-	offset = (uint16_t) ((value&0x00FF) << 8) | ((value&0xFF00) >>8);
-	ret = i2c_smbus_write_word_data(ps_data->client,rpr0521_DATA1_OFFSET_REG,offset);
-	if(ret < 0)
-	{
-		printk(KERN_ERR "%s: write i2c error\n", __func__);
-		return ret;
-	}
-	return size;
-}
-
-
-static ssize_t rpr0521_ps_distance_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
-    int32_t dist=1, ret;
-
-    mutex_lock(&ps_data->io_lock);
-    ret = rpr0521_get_flag(ps_data);
-	if(ret < 0)
-	{
-		printk(KERN_ERR "%s: rpr0521_get_flag failed, ret=0x%x\n", __func__, ret);
-		return ret;
-	}
-    dist = (ret & rpr0521_FLG_NF_MASK)?1:0;
-
-    ps_data->ps_distance_last = dist;
-	input_report_abs(ps_data->ps_input_dev, ABS_DISTANCE, dist);
-	input_sync(ps_data->ps_input_dev);
-    mutex_unlock(&ps_data->io_lock);
-	wake_lock_timeout(&ps_data->ps_wakelock, 3*HZ);
-	dev_dbg(dev, "%s: ps input event %d cm\n", __func__, dist);
-    return scnprintf(buf, PAGE_SIZE, "%d\n", dist);
-}
-
-
-static ssize_t rpr0521_ps_distance_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
-{
-	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
-	unsigned long value = 0;
-	int ret;
-	ret = kstrtoul(buf, 10, &value);
-	if(ret < 0)
-	{
-		printk(KERN_ERR "%s:kstrtoul failed, ret=0x%x\n",
-			__func__, ret);
-		return ret;
-	}
-    mutex_lock(&ps_data->io_lock);
-    ps_data->ps_distance_last = value;
-	input_report_abs(ps_data->ps_input_dev, ABS_DISTANCE, value);
-	input_sync(ps_data->ps_input_dev);
-    mutex_unlock(&ps_data->io_lock);
-	wake_lock_timeout(&ps_data->ps_wakelock, 3*HZ);
-	dev_dbg(dev, "%s: ps input event %ld cm\n", __func__, value);
-    return size;
-}
-
-
-static ssize_t rpr0521_ps_code_thd_l_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-    int32_t ps_thd_l1_reg, ps_thd_l2_reg;
-	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
-    mutex_lock(&ps_data->io_lock);
-    ps_thd_l1_reg = i2c_smbus_read_byte_data(ps_data->client,rpr0521_THDL1_PS_REG);
-    if(ps_thd_l1_reg < 0)
-	{
-		printk(KERN_ERR "%s fail, err=0x%x", __func__, ps_thd_l1_reg);
-		return -EINVAL;
-	}
-    ps_thd_l2_reg = i2c_smbus_read_byte_data(ps_data->client,rpr0521_THDL2_PS_REG);
-    if(ps_thd_l2_reg < 0)
-	{
-		printk(KERN_ERR "%s fail, err=0x%x", __func__, ps_thd_l2_reg);
-		return -EINVAL;
-	}
-    mutex_unlock(&ps_data->io_lock);
-	ps_thd_l1_reg = ps_thd_l1_reg<<8 | ps_thd_l2_reg;
-    return scnprintf(buf, PAGE_SIZE, "%d\n", ps_thd_l1_reg);
-}
-
-
-static ssize_t rpr0521_ps_code_thd_l_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
-{
-	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
-	unsigned long value = 0;
-	int ret;
-	ret = kstrtoul(buf, 10, &value);
-	if(ret < 0)
-	{
-		printk(KERN_ERR "%s:kstrtoul failed, ret=0x%x\n",
-			__func__, ret);
-		return ret;
-	}
-    mutex_lock(&ps_data->io_lock);
-    rpr0521_set_ps_thd_l(ps_data, value);
-    mutex_unlock(&ps_data->io_lock);
-    return size;
-}
-
-static ssize_t rpr0521_ps_code_thd_h_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-    int32_t ps_thd_h1_reg, ps_thd_h2_reg;
-	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
-    mutex_lock(&ps_data->io_lock);
-    ps_thd_h1_reg = i2c_smbus_read_byte_data(ps_data->client,rpr0521_THDH1_PS_REG);
-    if(ps_thd_h1_reg < 0)
-	{
-		printk(KERN_ERR "%s fail, err=0x%x", __func__, ps_thd_h1_reg);
-		return -EINVAL;
-	}
-    ps_thd_h2_reg = i2c_smbus_read_byte_data(ps_data->client,rpr0521_THDH2_PS_REG);
-    if(ps_thd_h2_reg < 0)
-	{
-		printk(KERN_ERR "%s fail, err=0x%x", __func__, ps_thd_h2_reg);
-		return -EINVAL;
-	}
-    mutex_unlock(&ps_data->io_lock);
-	ps_thd_h1_reg = ps_thd_h1_reg<<8 | ps_thd_h2_reg;
-    return scnprintf(buf, PAGE_SIZE, "%d\n", ps_thd_h1_reg);
-}
-
-
-static ssize_t rpr0521_ps_code_thd_h_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
-{
-	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
-	unsigned long value = 0;
-	int ret;
-	ret = kstrtoul(buf, 10, &value);
-	if(ret < 0)
-	{
-		printk(KERN_ERR "%s:kstrtoul failed, ret=0x%x\n",
-			__func__, ret);
-		return ret;
-	}
-    mutex_lock(&ps_data->io_lock);
-    rpr0521_set_ps_thd_h(ps_data, value);
-    mutex_unlock(&ps_data->io_lock);
-    return size;
-}
-
-static ssize_t rpr0521_all_reg_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-    int32_t ps_reg[27];
-	uint8_t cnt;
-	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
-    mutex_lock(&ps_data->io_lock);
-	for(cnt=0;cnt<25;cnt++)
-	{
-		ps_reg[cnt] = i2c_smbus_read_byte_data(ps_data->client, (cnt));
-		if(ps_reg[cnt] < 0)
-		{
-			mutex_unlock(&ps_data->io_lock);
-			printk(KERN_ERR "rpr0521_all_reg_show:i2c_smbus_read_byte_data fail, ret=%d", ps_reg[cnt]);
-			return -EINVAL;
-		}
-		else
-		{
-			dev_dbg(dev, "reg[0x%2X]=0x%2X\n", cnt, ps_reg[cnt]);
-		}
-	}
-	ps_reg[cnt] = i2c_smbus_read_byte_data(ps_data->client, rpr0521_PDT_ID_REG);
-	if(ps_reg[cnt] < 0)
-	{
-		mutex_unlock(&ps_data->io_lock);
-		printk( KERN_ERR "all_reg_show:i2c_smbus_read_byte_data fail, ret=%d", ps_reg[cnt]);
-		return -EINVAL;
-	}
-	dev_dbg(dev, "reg[0x%x]=0x%2X\n", rpr0521_PDT_ID_REG, ps_reg[cnt]);
-	cnt++;
-	ps_reg[cnt] = i2c_smbus_read_byte_data(ps_data->client, rpr0521_RSRVD_REG);
-	if(ps_reg[cnt] < 0)
-	{
-		mutex_unlock(&ps_data->io_lock);
-		printk( KERN_ERR "all_reg_show:i2c_smbus_read_byte_data fail, ret=%d", ps_reg[cnt]);
-		return -EINVAL;
-	}
-	dev_dbg(dev, "reg[0x%x]=0x%2X\n", rpr0521_RSRVD_REG, ps_reg[cnt]);
-    mutex_unlock(&ps_data->io_lock);
-
-    return scnprintf(buf, PAGE_SIZE, "%2X %2X %2X %2X %2X,%2X %2X %2X %2X %2X,%2X %2X %2X %2X %2X,%2X %2X %2X %2X %2X,%2X %2X %2X %2X %2X,%2X %2X\n",
-		ps_reg[0], ps_reg[1], ps_reg[2], ps_reg[3], ps_reg[4], ps_reg[5], ps_reg[6], ps_reg[7], ps_reg[8],
-		ps_reg[9], ps_reg[10], ps_reg[11], ps_reg[12], ps_reg[13], ps_reg[14], ps_reg[15], ps_reg[16], ps_reg[17],
-		ps_reg[18], ps_reg[19], ps_reg[20], ps_reg[21], ps_reg[22], ps_reg[23], ps_reg[24], ps_reg[25], ps_reg[26]);
-}
-
-static ssize_t rpr0521_recv_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	return 0;
-}
-
-
-static ssize_t rpr0521_recv_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
-{
-    unsigned long value = 0;
-	int ret;
-	int32_t recv_data;
-	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
-
-	ret = kstrtoul(buf, 16, &value);
-	if (ret < 0) {
-		printk(KERN_ERR "%s:kstrtoul failed, ret=0x%x\n",
-			__func__, ret);
-		return ret;
-	}
-	recv_data = i2c_smbus_read_byte_data(ps_data->client,value);
-	printk("%s: reg 0x%x=0x%x\n", __func__, (int)value, recv_data);
-	return size;
-}
-
-
-static ssize_t rpr0521_send_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-	return 0;
-}
-
-
-static ssize_t rpr0521_send_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
-{
-	int addr, cmd;
-	u8 addr_u8, cmd_u8;
-	int32_t ret, i;
-	char *token[10];
-	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
-
-	for (i = 0; i < 2; i++)
-		token[i] = strsep((char **)&buf, " ");
-	ret = kstrtoul(token[0], 16, (unsigned long *)&(addr));
-	if (ret < 0) {
-
-		printk(KERN_ERR "%s:kstrtoul failed, ret=0x%x\n",
-			__func__, ret);
-		return ret;
-	}
-	ret = kstrtoul(token[1], 16, (unsigned long *)&(cmd));
-	if (ret < 0) {
-		printk(KERN_ERR "%s:kstrtoul failed, ret=0x%x\n",
-			__func__, ret);
-		return ret;
-	}
-	dev_dbg(dev, "%s: write reg 0x%x=0x%x\n", __func__, addr, cmd);
-	addr_u8 = (u8) addr;
-	cmd_u8 = (u8) cmd;
-	//mutex_lock(&ps_data->io_lock);
-	ret = i2c_smbus_write_byte_data(ps_data->client,addr_u8,cmd_u8);
-	//mutex_unlock(&ps_data->io_lock);
-	if (0 != ret)
-	{
-		printk(KERN_ERR "%s: i2c_smbus_write_byte_data fail\n", __func__);
-		return ret;
-	}
-
-	return size;
-}
+// static int rpr0521_device_ctl(struct rpr0521_data *ps_data, bool enable)
+// {
+// 	int ret;
+// 	struct device *dev = &ps_data->client->dev;
+
+// 	if (enable && !ps_data->power_enabled) {
+// 		ret = rpr0521_set_power_state(ps_data, true, RPR0521_MODE_PXS_MASK);
+// 		if (ret) {
+// 			dev_err(dev, "Failed to enable device power\n");
+// 			goto err_exit;
+// 		}
+// 		ret = rpr0521_init(ps_data);
+// 		if (ret < 0) {
+// 			rpr0521_set_power_state(ps_data, false, RPR0521_MODE_PXS_MASK);
+// 			dev_err(dev, "Failed to re-init device setting\n");
+// 			goto err_exit;
+// 		}
+// 	} else if (!enable && ps_data->power_enabled) {
+// 		if (!ps_data->als_enabled && !ps_data->ps_enabled) {
+// 			ret = rpr0521_set_power_state(ps_data, false, RPR0521_MODE_PXS_MASK);
+// 			if (ret) {
+// 				dev_err(dev, "Failed to disable device power\n");
+// 				goto err_exit;
+// 			}
+// 		} else {
+// 			dev_dbg(dev, "device control: als_enabled=%d, ps_enabled=%d\n",
+// 				ps_data->als_enabled, ps_data->ps_enabled);
+// 		}
+// 	} else {
+// 		dev_dbg(dev, "device control: enable=%d, power_enabled=%d\n",
+// 			enable, ps_data->power_enabled);
+// 	}
+// 	return 0;
+
+// err_exit:
+// 	return ret;
+// }
+
+// static int32_t rpr0521_enable_ps(struct rpr0521_data *ps_data, uint8_t enable)
+// {
+//     int32_t ret;
+// 	uint8_t w_state_reg;
+// 	uint8_t curr_ps_enable;
+// 	curr_ps_enable = ps_data->ps_enabled?1:0;
+// 	if(curr_ps_enable == enable)
+// 		return 0;
+
+// 	if (enable) {
+// 		ret = rpr0521_device_ctl(ps_data, enable);
+// 		if (ret)
+// 			return ret;
+// 	}
+
+//     ret = i2c_smbus_read_byte_data(ps_data->client, STK_STATE_REG);
+//     if (ret < 0)
+//     {
+// 			printk(KERN_ERR "%s: write i2c error, ret=%d\n", __func__, ret);
+// 		return ret;
+//     }
+// 	w_state_reg = ret;
+// 	w_state_reg &= ~(STK_STATE_EN_PS_MASK | STK_STATE_EN_WAIT_MASK | 0x60);
+// 	if(enable)
+// 	{
+// 		w_state_reg |= STK_STATE_EN_PS_MASK;
+// 		if(!(ps_data->als_enabled))
+// 			w_state_reg |= STK_STATE_EN_WAIT_MASK;
+// 	}
+//     ret = i2c_smbus_write_byte_data(ps_data->client, STK_STATE_REG, w_state_reg);
+//     if (ret < 0)
+// 	{
+// 		printk(KERN_ERR "%s: write i2c error, ret=%d\n", __func__, ret);
+// 		return ret;
+// 	}
+
+//     if(enable)
+// 	{
+// #ifdef STK_POLL_PS
+// 		hrtimer_start(&ps_data->ps_timer, ps_data->ps_poll_delay, HRTIMER_MODE_REL);
+// 		ps_data->ps_distance_last = -1;
+// #endif
+// 		ps_data->ps_enabled = true;
+// 	}
+// 	else
+// 	{
+// #ifdef STK_POLL_PS
+// 		hrtimer_cancel(&ps_data->ps_timer);
+// #endif
+// 		ps_data->ps_enabled = false;
+// 	}
+// 	if (!enable) {
+// 		ret = rpr0521_device_ctl(ps_data, enable);
+// 		if (ret)
+// 			return ret;
+// 	}
+
+// 	return ret;
+// }
+
+
+// static int32_t rpr0521_set_ps_thd_l(struct rpr0521_data *ps_data, uint16_t thd_l)
+// {
+//     uint8_t temp;
+//     uint8_t* pSrc = (uint8_t*)&thd_l;
+
+//     temp = *pSrc;
+//     *pSrc = *(pSrc+1);
+//     *(pSrc+1) = temp;
+//     ps_data->ps_thd_l = thd_l;
+// 	return i2c_smbus_write_word_data(ps_data->client,0x4B,thd_l);
+// }
+
+// static int32_t rpr0521_set_ps_thd_h(struct rpr0521_data *ps_data, uint16_t thd_h)
+// {
+//     uint8_t temp;
+//     uint8_t* pSrc = (uint8_t*)&thd_h;
+
+//     temp = *pSrc;
+//     *pSrc = *(pSrc+1);
+//     *(pSrc+1) = temp;
+//     ps_data->ps_thd_h = thd_h;
+// 	return i2c_smbus_write_word_data(ps_data->client,0x4C,thd_h);
+// }
+
+
+// static inline uint32_t rpr0521_get_ps_reading(struct rpr0521_data *ps_data)
+// {
+// 	int32_t word_data, tmp_word_data;
+
+// 	tmp_word_data = i2c_smbus_read_word_data(ps_data->client,0x44);
+// 	if(tmp_word_data < 0)
+// 	{
+// 		printk(KERN_ERR "%s fail, err=0x%x", __func__, tmp_word_data);
+// 		return tmp_word_data;
+// 	}
+// 	word_data = ((tmp_word_data & 0xFF00) >> 8) | ((tmp_word_data & 0x00FF) << 8) ;
+// 	return word_data;
+// }
+
+// static ssize_t rpr0521_ps_code_show(struct device *dev, struct device_attribute *attr, char *buf)
+// {
+// 	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
+//     uint32_t reading;
+//     reading = rpr0521_get_ps_reading(ps_data);
+//     return scnprintf(buf, PAGE_SIZE, "%d\n", reading);
+// }
+
+// static int rpr0521_ps_enable_set(struct sensors_classdev *sensors_cdev,
+// 						unsigned int enabled)
+// {
+// 	struct rpr0521_data *ps_data = container_of(sensors_cdev,
+// 						struct rpr0521_data, ps_cdev);
+// 	int err;
+
+// 	mutex_lock(&ps_data->io_lock);
+// 	err = rpr0521_enable_ps(ps_data, enabled);
+// 	mutex_unlock(&ps_data->io_lock);
+
+// 	if (err < 0)
+// 		return err;
+// 	return 0;
+// }
+
+// static ssize_t rpr0521_ps_enable_show(struct device *dev, struct device_attribute *attr, char *buf)
+// {
+//     int32_t enable, ret;
+// 	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
+
+//     mutex_lock(&ps_data->io_lock);
+// 	enable = (ps_data->ps_enabled)?1:0;
+//     mutex_unlock(&ps_data->io_lock);
+//     ret = i2c_smbus_read_byte_data(ps_data->client,rpr0521_STATE_REG);
+//     ret = (ret & rpr0521_STATE_EN_PS_MASK)?1:0;
+
+// 	if(enable != ret)
+// 		printk(KERN_ERR "%s: driver and sensor mismatch! driver_enable=0x%x, sensor_enable=%x\n", __func__, enable, ret);
+
+// 	return scnprintf(buf, PAGE_SIZE, "%d\n", ret);
+// }
+
+// static ssize_t rpr0521_ps_enable_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+// {
+// 	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
+// 	uint8_t en;
+// 	if (sysfs_streq(buf, "1"))
+// 		en = 1;
+// 	else if (sysfs_streq(buf, "0"))
+// 		en = 0;
+// 	else
+// 	{
+// 		printk(KERN_ERR "%s, invalid value %d\n", __func__, *buf);
+// 		return -EINVAL;
+// 	}
+// 	dev_dbg(dev, "%s: Enable PS : %d\n", __func__, en);
+//     mutex_lock(&ps_data->io_lock);
+//     rpr0521_enable_ps(ps_data, en);
+//     mutex_unlock(&ps_data->io_lock);
+//     return size;
+// }
+
+// static ssize_t rpr0521_ps_enable_aso_show(struct device *dev, struct device_attribute *attr, char *buf)
+// {
+//     int32_t ret;
+// 	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
+
+//     ret = i2c_smbus_read_byte_data(ps_data->client,rpr0521_STATE_REG);
+//     ret = (ret & rpr0521_STATE_EN_ASO_MASK)?1:0;
+
+// 	return scnprintf(buf, PAGE_SIZE, "%d\n", ret);
+// }
+
+// static ssize_t rpr0521_ps_enable_aso_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+// {
+// 	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
+// 	uint8_t en;
+//     int32_t ret;
+// 	uint8_t w_state_reg;
+
+// 	if (sysfs_streq(buf, "1"))
+// 		en = 1;
+// 	else if (sysfs_streq(buf, "0"))
+// 		en = 0;
+// 	else
+// 	{
+// 		printk(KERN_ERR "%s, invalid value %d\n", __func__, *buf);
+// 		return -EINVAL;
+// 	}
+// 	dev_dbg(dev, "%s: Enable PS ASO : %d\n", __func__, en);
+
+//     ret = i2c_smbus_read_byte_data(ps_data->client, rpr0521_STATE_REG);
+//     if (ret < 0)
+//     {
+//         printk(KERN_ERR "%s: write i2c error\n", __func__);
+// 		return ret;
+//     }
+// 	w_state_reg = (uint8_t)(ret & (~rpr0521_STATE_EN_ASO_MASK));
+// 	if(en)
+// 		w_state_reg |= rpr0521_STATE_EN_ASO_MASK;
+
+//     ret = i2c_smbus_write_byte_data(ps_data->client, rpr0521_STATE_REG, w_state_reg);
+//     if (ret < 0)
+// 	{
+// 		printk(KERN_ERR "%s: write i2c error\n", __func__);
+// 		return ret;
+// 	}
+
+// 	return size;
+// }
+
+
+// static ssize_t rpr0521_ps_offset_show(struct device *dev, struct device_attribute *attr, char *buf)
+// {
+// 	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
+//     int32_t word_data, tmp_word_data;
+
+// 	tmp_word_data = i2c_smbus_read_word_data(ps_data->client, rpr0521_DATA1_OFFSET_REG);
+// 	if(tmp_word_data < 0)
+// 	{
+// 		printk(KERN_ERR "%s fail, err=0x%x", __func__, tmp_word_data);
+// 		return tmp_word_data;
+// 	}
+// 		word_data = ((tmp_word_data & 0xFF00) >> 8) | ((tmp_word_data & 0x00FF) << 8) ;
+// 	return scnprintf(buf, PAGE_SIZE, "%d\n", word_data);
+// }
+
+// static ssize_t rpr0521_ps_offset_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+// {
+// 	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
+// 	unsigned long value = 0;
+// 	int ret;
+// 	uint16_t offset;
+
+// 	ret = kstrtoul(buf, 10, &value);
+// 	if(ret < 0)
+// 	{
+// 		printk(KERN_ERR "%s:kstrtoul failed, ret=0x%x\n",
+// 			__func__, ret);
+// 		return ret;
+// 	}
+// 	if(value > 65535)
+// 	{
+// 		printk(KERN_ERR "%s: invalid value, offset=%ld\n", __func__, value);
+// 		return -EINVAL;
+// 	}
+
+// 	offset = (uint16_t) ((value&0x00FF) << 8) | ((value&0xFF00) >>8);
+// 	ret = i2c_smbus_write_word_data(ps_data->client,rpr0521_DATA1_OFFSET_REG,offset);
+// 	if(ret < 0)
+// 	{
+// 		printk(KERN_ERR "%s: write i2c error\n", __func__);
+// 		return ret;
+// 	}
+// 	return size;
+// }
+
+
+// static ssize_t rpr0521_ps_distance_show(struct device *dev, struct device_attribute *attr, char *buf)
+// {
+// 	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
+//     int32_t dist=1, ret;
+
+//     mutex_lock(&ps_data->io_lock);
+//     ret = rpr0521_get_flag(ps_data);
+// 	if(ret < 0)
+// 	{
+// 		printk(KERN_ERR "%s: rpr0521_get_flag failed, ret=0x%x\n", __func__, ret);
+// 		return ret;
+// 	}
+//     dist = (ret & rpr0521_FLG_NF_MASK)?1:0;
+
+//     ps_data->ps_distance_last = dist;
+// 	input_report_abs(ps_data->ps_input_dev, ABS_DISTANCE, dist);
+// 	input_sync(ps_data->ps_input_dev);
+//     mutex_unlock(&ps_data->io_lock);
+// 	wake_lock_timeout(&ps_data->ps_wakelock, 3*HZ);
+// 	dev_dbg(dev, "%s: ps input event %d cm\n", __func__, dist);
+//     return scnprintf(buf, PAGE_SIZE, "%d\n", dist);
+// }
+
+
+// static ssize_t rpr0521_ps_distance_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+// {
+// 	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
+// 	unsigned long value = 0;
+// 	int ret;
+// 	ret = kstrtoul(buf, 10, &value);
+// 	if(ret < 0)
+// 	{
+// 		printk(KERN_ERR "%s:kstrtoul failed, ret=0x%x\n",
+// 			__func__, ret);
+// 		return ret;
+// 	}
+//     mutex_lock(&ps_data->io_lock);
+//     ps_data->ps_distance_last = value;
+// 	input_report_abs(ps_data->ps_input_dev, ABS_DISTANCE, value);
+// 	input_sync(ps_data->ps_input_dev);
+//     mutex_unlock(&ps_data->io_lock);
+// 	wake_lock_timeout(&ps_data->ps_wakelock, 3*HZ);
+// 	dev_dbg(dev, "%s: ps input event %ld cm\n", __func__, value);
+//     return size;
+// }
+
+
+// static ssize_t rpr0521_ps_code_thd_l_show(struct device *dev, struct device_attribute *attr, char *buf)
+// {
+//     int32_t ps_thd_l1_reg, ps_thd_l2_reg;
+// 	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
+//     mutex_lock(&ps_data->io_lock);
+//     ps_thd_l1_reg = i2c_smbus_read_byte_data(ps_data->client,rpr0521_THDL1_PS_REG);
+//     if(ps_thd_l1_reg < 0)
+// 	{
+// 		printk(KERN_ERR "%s fail, err=0x%x", __func__, ps_thd_l1_reg);
+// 		return -EINVAL;
+// 	}
+//     ps_thd_l2_reg = i2c_smbus_read_byte_data(ps_data->client,rpr0521_THDL2_PS_REG);
+//     if(ps_thd_l2_reg < 0)
+// 	{
+// 		printk(KERN_ERR "%s fail, err=0x%x", __func__, ps_thd_l2_reg);
+// 		return -EINVAL;
+// 	}
+//     mutex_unlock(&ps_data->io_lock);
+// 	ps_thd_l1_reg = ps_thd_l1_reg<<8 | ps_thd_l2_reg;
+//     return scnprintf(buf, PAGE_SIZE, "%d\n", ps_thd_l1_reg);
+// }
+
+
+// static ssize_t rpr0521_ps_code_thd_l_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+// {
+// 	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
+// 	unsigned long value = 0;
+// 	int ret;
+// 	ret = kstrtoul(buf, 10, &value);
+// 	if(ret < 0)
+// 	{
+// 		printk(KERN_ERR "%s:kstrtoul failed, ret=0x%x\n",
+// 			__func__, ret);
+// 		return ret;
+// 	}
+//     mutex_lock(&ps_data->io_lock);
+//     rpr0521_set_ps_thd_l(ps_data, value);
+//     mutex_unlock(&ps_data->io_lock);
+//     return size;
+// }
+
+// static ssize_t rpr0521_ps_code_thd_h_show(struct device *dev, struct device_attribute *attr, char *buf)
+// {
+//     int32_t ps_thd_h1_reg, ps_thd_h2_reg;
+// 	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
+//     mutex_lock(&ps_data->io_lock);
+//     ps_thd_h1_reg = i2c_smbus_read_byte_data(ps_data->client,rpr0521_THDH1_PS_REG);
+//     if(ps_thd_h1_reg < 0)
+// 	{
+// 		printk(KERN_ERR "%s fail, err=0x%x", __func__, ps_thd_h1_reg);
+// 		return -EINVAL;
+// 	}
+//     ps_thd_h2_reg = i2c_smbus_read_byte_data(ps_data->client,rpr0521_THDH2_PS_REG);
+//     if(ps_thd_h2_reg < 0)
+// 	{
+// 		printk(KERN_ERR "%s fail, err=0x%x", __func__, ps_thd_h2_reg);
+// 		return -EINVAL;
+// 	}
+//     mutex_unlock(&ps_data->io_lock);
+// 	ps_thd_h1_reg = ps_thd_h1_reg<<8 | ps_thd_h2_reg;
+//     return scnprintf(buf, PAGE_SIZE, "%d\n", ps_thd_h1_reg);
+// }
+
+
+// static ssize_t rpr0521_ps_code_thd_h_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+// {
+// 	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
+// 	unsigned long value = 0;
+// 	int ret;
+// 	ret = kstrtoul(buf, 10, &value);
+// 	if(ret < 0)
+// 	{
+// 		printk(KERN_ERR "%s:kstrtoul failed, ret=0x%x\n",
+// 			__func__, ret);
+// 		return ret;
+// 	}
+//     mutex_lock(&ps_data->io_lock);
+//     rpr0521_set_ps_thd_h(ps_data, value);
+//     mutex_unlock(&ps_data->io_lock);
+//     return size;
+// }
+
+// static ssize_t rpr0521_all_reg_show(struct device *dev, struct device_attribute *attr, char *buf)
+// {
+//     int32_t ps_reg[27];
+// 	uint8_t cnt;
+// 	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
+//     mutex_lock(&ps_data->io_lock);
+// 	for(cnt=0;cnt<25;cnt++)
+// 	{
+// 		ps_reg[cnt] = i2c_smbus_read_byte_data(ps_data->client, (cnt));
+// 		if(ps_reg[cnt] < 0)
+// 		{
+// 			mutex_unlock(&ps_data->io_lock);
+// 			printk(KERN_ERR "rpr0521_all_reg_show:i2c_smbus_read_byte_data fail, ret=%d", ps_reg[cnt]);
+// 			return -EINVAL;
+// 		}
+// 		else
+// 		{
+// 			dev_dbg(dev, "reg[0x%2X]=0x%2X\n", cnt, ps_reg[cnt]);
+// 		}
+// 	}
+// 	ps_reg[cnt] = i2c_smbus_read_byte_data(ps_data->client, rpr0521_PDT_ID_REG);
+// 	if(ps_reg[cnt] < 0)
+// 	{
+// 		mutex_unlock(&ps_data->io_lock);
+// 		printk( KERN_ERR "all_reg_show:i2c_smbus_read_byte_data fail, ret=%d", ps_reg[cnt]);
+// 		return -EINVAL;
+// 	}
+// 	dev_dbg(dev, "reg[0x%x]=0x%2X\n", rpr0521_PDT_ID_REG, ps_reg[cnt]);
+// 	cnt++;
+// 	ps_reg[cnt] = i2c_smbus_read_byte_data(ps_data->client, rpr0521_RSRVD_REG);
+// 	if(ps_reg[cnt] < 0)
+// 	{
+// 		mutex_unlock(&ps_data->io_lock);
+// 		printk( KERN_ERR "all_reg_show:i2c_smbus_read_byte_data fail, ret=%d", ps_reg[cnt]);
+// 		return -EINVAL;
+// 	}
+// 	dev_dbg(dev, "reg[0x%x]=0x%2X\n", rpr0521_RSRVD_REG, ps_reg[cnt]);
+//     mutex_unlock(&ps_data->io_lock);
+
+//     return scnprintf(buf, PAGE_SIZE, "%2X %2X %2X %2X %2X,%2X %2X %2X %2X %2X,%2X %2X %2X %2X %2X,%2X %2X %2X %2X %2X,%2X %2X %2X %2X %2X,%2X %2X\n",
+// 		ps_reg[0], ps_reg[1], ps_reg[2], ps_reg[3], ps_reg[4], ps_reg[5], ps_reg[6], ps_reg[7], ps_reg[8],
+// 		ps_reg[9], ps_reg[10], ps_reg[11], ps_reg[12], ps_reg[13], ps_reg[14], ps_reg[15], ps_reg[16], ps_reg[17],
+// 		ps_reg[18], ps_reg[19], ps_reg[20], ps_reg[21], ps_reg[22], ps_reg[23], ps_reg[24], ps_reg[25], ps_reg[26]);
+// }
+
+// static ssize_t rpr0521_recv_show(struct device *dev, struct device_attribute *attr, char *buf)
+// {
+// 	return 0;
+// }
+
+
+// static ssize_t rpr0521_recv_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+// {
+//     unsigned long value = 0;
+// 	int ret;
+// 	int32_t recv_data;
+// 	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
+
+// 	ret = kstrtoul(buf, 16, &value);
+// 	if (ret < 0) {
+// 		printk(KERN_ERR "%s:kstrtoul failed, ret=0x%x\n",
+// 			__func__, ret);
+// 		return ret;
+// 	}
+// 	recv_data = i2c_smbus_read_byte_data(ps_data->client,value);
+// 	printk("%s: reg 0x%x=0x%x\n", __func__, (int)value, recv_data);
+// 	return size;
+// }
+
+
+// static ssize_t rpr0521_send_show(struct device *dev, struct device_attribute *attr, char *buf)
+// {
+// 	return 0;
+// }
+
+
+// static ssize_t rpr0521_send_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+// {
+// 	int addr, cmd;
+// 	u8 addr_u8, cmd_u8;
+// 	int32_t ret, i;
+// 	char *token[10];
+// 	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
+
+// 	for (i = 0; i < 2; i++)
+// 		token[i] = strsep((char **)&buf, " ");
+// 	ret = kstrtoul(token[0], 16, (unsigned long *)&(addr));
+// 	if (ret < 0) {
+
+// 		printk(KERN_ERR "%s:kstrtoul failed, ret=0x%x\n",
+// 			__func__, ret);
+// 		return ret;
+// 	}
+// 	ret = kstrtoul(token[1], 16, (unsigned long *)&(cmd));
+// 	if (ret < 0) {
+// 		printk(KERN_ERR "%s:kstrtoul failed, ret=0x%x\n",
+// 			__func__, ret);
+// 		return ret;
+// 	}
+// 	dev_dbg(dev, "%s: write reg 0x%x=0x%x\n", __func__, addr, cmd);
+// 	addr_u8 = (u8) addr;
+// 	cmd_u8 = (u8) cmd;
+// 	//mutex_lock(&ps_data->io_lock);
+// 	ret = i2c_smbus_write_byte_data(ps_data->client,addr_u8,cmd_u8);
+// 	//mutex_unlock(&ps_data->io_lock);
+// 	if (0 != ret)
+// 	{
+// 		printk(KERN_ERR "%s: i2c_smbus_write_byte_data fail\n", __func__);
+// 		return ret;
+// 	}
+
+// 	return size;
+// }
 
 
 /* ========================= END ADDING ========================= */
@@ -1608,28 +1608,28 @@ static const struct regmap_config rpr0521_regmap_config = {
 	.volatile_reg	= rpr0521_is_volatile_reg,
 };
 
-static struct device_attribute ps_enable_attribute = __ATTR(enable,0664,rpr0521_ps_enable_show,rpr0521_ps_enable_store);
-static struct device_attribute ps_enable_aso_attribute = __ATTR(enableaso,0664,rpr0521_ps_enable_aso_show,rpr0521_ps_enable_aso_store);
+// static struct device_attribute ps_enable_attribute = __ATTR(enable,0664,rpr0521_ps_enable_show,rpr0521_ps_enable_store);
+// static struct device_attribute ps_enable_aso_attribute = __ATTR(enableaso,0664,rpr0521_ps_enable_aso_show,rpr0521_ps_enable_aso_store);
 static struct device_attribute ps_distance_attribute = __ATTR(distance,0664,rpr0521_ps_distance_show,NULL);
-static struct device_attribute ps_offset_attribute = __ATTR(offset,0664,rpr0521_ps_offset_show, rpr0521_ps_offset_store);
-static struct device_attribute ps_code_attribute = __ATTR(code, 0444, rpr0521_ps_code_show, NULL);
-static struct device_attribute ps_code_thd_l_attribute = __ATTR(codethdl,0664,rpr0521_ps_code_thd_l_show,rpr0521_ps_code_thd_l_store);
-static struct device_attribute ps_code_thd_h_attribute = __ATTR(codethdh,0664,rpr0521_ps_code_thd_h_show,rpr0521_ps_code_thd_h_store);
-static struct device_attribute recv_attribute = __ATTR(recv,0664,rpr0521_recv_show,rpr0521_recv_store);
-static struct device_attribute send_attribute = __ATTR(send,0664,rpr0521_send_show, rpr0521_send_store);
-static struct device_attribute all_reg_attribute = __ATTR(allreg, 0444, rpr0521_all_reg_show, NULL);
+// static struct device_attribute ps_offset_attribute = __ATTR(offset,0664,rpr0521_ps_offset_show, rpr0521_ps_offset_store);
+// static struct device_attribute ps_code_attribute = __ATTR(code, 0444, rpr0521_ps_code_show, NULL);
+// static struct device_attribute ps_code_thd_l_attribute = __ATTR(codethdl,0664,rpr0521_ps_code_thd_l_show,rpr0521_ps_code_thd_l_store);
+// static struct device_attribute ps_code_thd_h_attribute = __ATTR(codethdh,0664,rpr0521_ps_code_thd_h_show,rpr0521_ps_code_thd_h_store);
+// static struct device_attribute recv_attribute = __ATTR(recv,0664,rpr0521_recv_show,rpr0521_recv_store);
+// static struct device_attribute send_attribute = __ATTR(send,0664,rpr0521_send_show, rpr0521_send_store);
+// static struct device_attribute all_reg_attribute = __ATTR(allreg, 0444, rpr0521_all_reg_show, NULL);
 static struct attribute *rpr_ps_attrs [] =
 {
-    &ps_enable_attribute.attr,
-    &ps_enable_aso_attribute.attr,
+    // &ps_enable_attribute.attr,
+    // &ps_enable_aso_attribute.attr,
     &ps_distance_attribute.attr,
-	&ps_offset_attribute.attr,
-    &ps_code_attribute.attr,
-	&ps_code_thd_l_attribute.attr,
-	&ps_code_thd_h_attribute.attr,
-	&recv_attribute.attr,
-	&send_attribute.attr,
-	&all_reg_attribute.attr,
+	// &ps_offset_attribute.attr,
+    // &ps_code_attribute.attr,
+	// &ps_code_thd_l_attribute.attr,
+	// &ps_code_thd_h_attribute.attr,
+	// &recv_attribute.attr,
+	// &send_attribute.attr,
+	// &all_reg_attribute.attr,
     NULL
 };
 
