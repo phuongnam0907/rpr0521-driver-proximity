@@ -4,10 +4,6 @@
 
 [Datasheet STK3X1X](http://pro0fc108.hkpic1.websiteonline.cn/upload/hc7r.pdf)
 
-
-* <b>Proximity:</b> <i>rpr0521_proximity.c</i>
-* <b>Ammient Light:</b> <i>...</i>
-
 1. Device tree
 
 ```
@@ -22,13 +18,13 @@
 		vdd-supply = <&pm8909_l17>;
 	  	vio-supply = <&pm8909_l6>;
 		rpr,irq-gpio = <&msm_gpio 94 0x02>;
-		rpr,transmittance = <500>;
-		rpr,state-reg = <0x03>;
-		rpr,psctrl-reg = <0x71>;
-		rpr,alsctrl-reg = <0x38>;
-		rpr,ps-thdh = <10000>; 
-		rpr,ps-thdl = <1500>;
-		rpr,use-fir;
+		rpr,transmittance = <1000>;
+		rpr,state-reg = <0x08>;
+		rpr,psctrl-reg = <0x00>;
+		rpr,alsctrl-reg = <0x02>;
+		rpr,ps-thdh = <65295>; 
+		rpr,ps-thdl = <0>;
+		// rpr,use-fir;
 	};
 };
 
@@ -59,5 +55,10 @@ obj-$(CONFIG_RPR_0521RS)	+= rpr0521.o
 4. Defconfig
 
 ```
+# 9. proximity sensor RPR_0521RS
+CONFIG_IIO=y
+CONFIG_IIO_TRIGGER=y
+CONFIG_IIO_BUFFER=y
+CONFIG_IIO_TRIGGERED_BUFFER=y
 CONFIG_RPR_0521RS=y
 ```
