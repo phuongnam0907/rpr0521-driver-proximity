@@ -1873,9 +1873,9 @@ static int rpr0521_probe(struct i2c_client *client,
 	ps_data->ps_enabled = false;
 
 	/* make sure everything is ok before registering the class device */
-	// ps_data->als_cdev = sensors_light_cdev;
-	// ps_data->als_cdev.sensors_enable = rpr_als_enable_set;
-	// ps_data->als_cdev.sensors_poll_delay = rpr_als_poll_delay_set;
+	ps_data->als_cdev = sensors_light_cdev;
+	ps_data->als_cdev.sensors_enable = rpr_als_enable_set;
+	ps_data->als_cdev.sensors_poll_delay = rpr_als_poll_delay_set;
 	// err = sensors_classdev_register(&ps_data->als_input_dev->dev,
 	// 		&ps_data->als_cdev);
 	// if (err)
