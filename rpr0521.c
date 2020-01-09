@@ -82,8 +82,6 @@
 #define RPR_DATA2_ALS_REG_1		0x49
 #define RPR_DATA1_OFFSET_REG 	0x53
 #define RPR_DATA2_OFFSET_REG 	0x54
-	#define RPR_DATA1_IR_REG 		0x17
-	#define RPR_DATA2_IR_REG 		0x18
 #define RPR_PDT_ID_REG 			0x92
 #define RPR_RSRVD_REG 			0x3F
 #define RPR_SW_RESET_REG		0x80
@@ -1876,10 +1874,10 @@ static int rpr0521_probe(struct i2c_client *client,
 	ps_data->als_cdev = sensors_light_cdev;
 	ps_data->als_cdev.sensors_enable = rpr_als_enable_set;
 	ps_data->als_cdev.sensors_poll_delay = rpr_als_poll_delay_set;
-	// err = sensors_classdev_register(&ps_data->als_input_dev->dev,
-	// 		&ps_data->als_cdev);
-	// if (err)
-	// 	goto err_power_on;
+	err = sensors_classdev_register(&ps_data->als_input_dev->dev,
+			&ps_data->als_cdev);
+	if (err)
+		goto err_power_on;
 
 	ps_data->ps_cdev = sensors_proximity_cdev;
 	ps_data->ps_cdev.sensors_enable = rpr_ps_enable_set;

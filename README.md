@@ -4,6 +4,8 @@
 
 [Datasheet STK3X1X](http://pro0fc108.hkpic1.websiteonline.cn/upload/hc7r.pdf)
 
+<b>Direction:</b> {AOSP}/kernel/driver/iio/light/
+
 1. Device tree
 
 ```
