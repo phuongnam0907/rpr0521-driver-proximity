@@ -22,10 +22,12 @@
 		rpr,irq-gpio = <&msm_gpio 94 0x02>;
 		rpr,transmittance = <1000>;
 		rpr,state-reg = <0x08>;
-		rpr,psctrl-reg = <0x00>;
+		rpr,psctrl-reg = <0x20>;
 		rpr,alsctrl-reg = <0x02>;
-		rpr,ps-thdh = <65295>; 
-		rpr,ps-thdl = <0>;
+		rpr,ps-thdh = <4096>;
+		rpr,ps-thdl = <2800>;
+		rpr,ps-delta-time = <10>;
+		rpr,ps-offset = <10>;
 		// rpr,use-fir;
 	};
 };

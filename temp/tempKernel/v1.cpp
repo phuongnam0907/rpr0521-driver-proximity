@@ -30,7 +30,6 @@
 #include <linux/i2c.h>
 #include <linux/mutex.h>
 #include <linux/kdev_t.h>
-#include <linux/sort.h>
 #include <linux/fs.h>
 #include <linux/input.h>
 #include <linux/sensors.h>
@@ -50,7 +49,7 @@
 #include <linux/of_gpio.h>
 #endif
 
-#define DRIVER_VERSION  "0.2.1"
+#define DRIVER_VERSION  "0.1.4"
 
 /* Driver Settings */
 #define CONFIG_RPR_PS_ALS_USE_CHANGE_THRESHOLD
@@ -175,11 +174,11 @@
 #define MAX_FIR_LEN 32
 
 #define RPR0521_MANUFACT_ID	0xE0
-#define RPR0521_ARRAY_CALIBRATION	50
+#define SIZE_ARRAY_PS_CALIBRATE 100
 
 static struct sensors_classdev sensors_light_cdev = {
 	.name = "rpr0521-light",
-	.vendor = "ROHM-Semiconductor",
+	.vendor = "Sensortek",
 	.version = 1,
 	.handle = SENSORS_LIGHT_HANDLE,
 	.type = SENSOR_TYPE_LIGHT,
@@ -198,13 +197,13 @@ static struct sensors_classdev sensors_light_cdev = {
 
 static struct sensors_classdev sensors_proximity_cdev = {
 	.name = "rpr0521-proximity",
-	.vendor = "ROHM-Semiconductor",
+	.vendor = "Sensortek",
 	.version = 1,
 	.handle = SENSORS_PROXIMITY_HANDLE,
 	.type = SENSOR_TYPE_PROXIMITY,
 	.max_range = "10.0",
-	.resolution = "1.0",
-	.sensor_power = "3",
+	.resolution = "10.0",
+	.sensor_power = "0.1",
 	.min_delay = 0,
 	.fifo_reserved_event_count = 0,
 	.fifo_max_event_count = 0,
@@ -229,11 +228,9 @@ struct rpr0521_platform_data {
 	uint16_t ps_thd_h;
 	uint16_t ps_thd_l;
 	int int_pin;
-	int ps_delta_time;
 	uint32_t transmittance;
 	uint32_t int_flags;
 	bool use_fir;
-	uint8_t ps_offset;
 };
 
 struct rpr0521_data {
@@ -244,7 +241,6 @@ struct rpr0521_data {
 	int		int_pin;
 	uint16_t ps_thd_h;
 	uint16_t ps_thd_l;
-	uint8_t ps_offset;
 	struct mutex io_lock;
 	struct input_dev *ps_input_dev;
 	int32_t ps_distance_last;
@@ -273,10 +269,6 @@ struct rpr0521_data {
 	bool use_fir;
 	struct data_filter      fir;
 	atomic_t                firlength;
-
-	unsigned int prev_number;
-	unsigned int curr_number_thd_l;
-	int ps_delta_time;
 };
 
 #if( !defined(CONFIG_RPR_PS_ALS_USE_CHANGE_THRESHOLD))
@@ -304,7 +296,6 @@ static int32_t rpr0521_set_ps_thd_l(struct rpr0521_data *ps_data, uint16_t thd_l
 static int32_t rpr0521_set_ps_thd_h(struct rpr0521_data *ps_data, uint16_t thd_h);
 static int32_t rpr0521_set_als_thd_l(struct rpr0521_data *ps_data, uint16_t thd_l);
 static int32_t rpr0521_set_als_thd_h(struct rpr0521_data *ps_data, uint16_t thd_h);
-static unsigned int rpr0521_calibrate(struct rpr0521_data* ps_data);	
 static int rpr0521_device_ctl(struct rpr0521_data *ps_data, bool enable);
 //static int32_t rpr0521_set_ps_aoffset(struct rpr0521_data *ps_data, uint16_t offset);
 
@@ -389,7 +380,6 @@ static int32_t rpr0521_init_all_reg(struct rpr0521_data *ps_data, struct rpr0521
 
 	ps_data->ps_thd_h = plat_data->ps_thd_h;
 	ps_data->ps_thd_l = plat_data->ps_thd_l;
-	ps_data->ps_offset = plat_data->ps_offset;
 
 	w_reg = plat_data->psctrl_reg;
     ret = i2c_smbus_write_byte_data(ps_data->client, RPR_PSCTRL_REG, w_reg);
@@ -408,6 +398,9 @@ static int32_t rpr0521_init_all_reg(struct rpr0521_data *ps_data, struct rpr0521
 
 	rpr0521_set_ps_thd_h(ps_data, ps_data->ps_thd_h);
 	rpr0521_set_ps_thd_l(ps_data, ps_data->ps_thd_l);
+	// ret = i2c_smbus_read_word_data(ps_data->client, RPR_THDL1_PS_REG);
+	// w_reg = ((ret & 0xFF00) >> 8) | ((ret & 0x00FF) << 8) ;
+	// rpr0521_set_ps_thd_l(ps_data, w_reg);
 
 	w_reg = 0;
 #ifndef RPR_POLL_PS
@@ -495,9 +488,8 @@ static int32_t rpr0521_set_ps_thd_l(struct rpr0521_data *ps_data, uint16_t thd_l
     temp = *pSrc;
     *pSrc = *(pSrc+1);
     *(pSrc+1) = temp;
-    // ps_data->ps_thd_l = thd_l;
-	ps_data->ps_thd_l = ((thd_l&0x00FF) << 8) | ((thd_l&0xFF00) >> 8);
-	return i2c_smbus_write_word_data(ps_data->client,RPR_THDL1_PS_REG,ps_data->ps_thd_l);
+    ps_data->ps_thd_l = thd_l;
+	return i2c_smbus_write_word_data(ps_data->client,RPR_THDL1_PS_REG,thd_l);
 }
 
 static int32_t rpr0521_set_ps_thd_h(struct rpr0521_data *ps_data, uint16_t thd_h)
@@ -508,9 +500,8 @@ static int32_t rpr0521_set_ps_thd_h(struct rpr0521_data *ps_data, uint16_t thd_h
     temp = *pSrc;
     *pSrc = *(pSrc+1);
     *(pSrc+1) = temp;
-    // ps_data->ps_thd_h = thd_h;
-	ps_data->ps_thd_h = ((thd_h&0x00FF) << 8) | ((thd_h&0xFF00) >> 8);
-	return i2c_smbus_write_word_data(ps_data->client,RPR_THDH1_PS_REG,ps_data->ps_thd_h);
+    ps_data->ps_thd_h = thd_h;
+	return i2c_smbus_write_word_data(ps_data->client,RPR_THDH1_PS_REG,thd_h);
 }
 
 static inline uint32_t rpr0521_get_ps_reading(struct rpr0521_data *ps_data)
@@ -563,9 +554,6 @@ static int32_t rpr0521_enable_ps(struct rpr0521_data *ps_data, uint8_t enable)
 		return ret;
 	}
 
-		ps_data->curr_number_thd_l = rpr0521_calibrate(ps_data);
-		ps_data->ps_thd_l = ps_data->curr_number_thd_l + ps_data->ps_offset;
-
     if(enable)
 	{
 #ifdef RPR_POLL_PS
@@ -579,14 +567,15 @@ static int32_t rpr0521_enable_ps(struct rpr0521_data *ps_data, uint8_t enable)
 #endif	/* #ifndef RPR_POLL_ALS	*/
 			enable_irq(ps_data->irq);
 		msleep(1);
-
 		ret = rpr0521_get_ps_reading(ps_data);
 
 		printk(KERN_INFO "%s: RPR0521 uper threshold - %d", __func__, ps_data->ps_thd_h);
 		printk(KERN_INFO "%s: RPR0521 lower threshold - %d", __func__, ps_data->ps_thd_l);
 		printk(KERN_INFO "%s: RPR0521 distance - %d", __func__, ret);
 
-		near_far_state = (ret>ps_data->ps_thd_l)?0:1;
+		// near_far_state = ((ret < ps_data->ps_thd_h) && (ret > ps_data->ps_thd_l))?0:1;
+		if ((ret < ps_data->ps_thd_h) && (ret > ps_data->ps_thd_l)) near_far_state = 0;
+		else near_far_state = 1;
 		ps_data->ps_distance_last = near_far_state;
 		input_report_abs(ps_data->ps_input_dev, ABS_DISTANCE, near_far_state);
 		input_sync(ps_data->ps_input_dev);
@@ -616,67 +605,6 @@ static int32_t rpr0521_enable_ps(struct rpr0521_data *ps_data, uint8_t enable)
 	}
 
 	return ret;
-}
-
-static unsigned int rpr0521_calibrate(struct rpr0521_data* ps_data)
-{
-	int j = 0, i = 0, max = 0,index = 0, h = 0;
-	int frequency, k;
-	unsigned int a[RPR0521_ARRAY_CALIBRATION];
-	unsigned int temp;
-	int n = RPR0521_ARRAY_CALIBRATION;
-
-	while (j<n)
-	{
-		a[j] = rpr0521_get_ps_reading(ps_data);
-		msleep(1);
-		j++;
-	}
-
-	while(h<n){
-		k = h + 1;
-		while(k < n){
-			if (a[h] > a[k]) {
-				temp = a[h];
-				a[h] = a[k];
-				a[k] = temp;
-			}
-			k++;
-		}
-		h++;
-	}
-
-	temp = 0;
-	j = 0;
-	while(j<n)
-	{
-		temp += a[j];
-		j++;
-	}
-	temp /= n;
-
-	while(i < n)
-	{
-		frequency = 1;
-		while(a[i] == a[i+1])
-		{
-			frequency++;
-			i++;
-		}
-		if(max < frequency)
-		{
-			max = frequency;
-			index = i;
-		}
-		i++;
-	} 
-
-	if (abs(temp - a[index]) <= 0) ps_data->ps_offset = 10;
-	else if (abs(temp - a[index]) < 20) ps_data->ps_offset = 30;
-	else if (abs(temp - a[index]) < 40) ps_data->ps_offset = 50;
-	else ps_data->ps_offset = abs(temp - a[index])/*  + 5 */;
-
-	return a[index];
 }
 
 static int32_t rpr0521_enable_als(struct rpr0521_data *ps_data, uint8_t enable)
@@ -1075,7 +1003,6 @@ static ssize_t rpr_als_fir_enable_store(struct device *dev,
 	}
 	return size;
 }
-
 static ssize_t rpr_ps_code_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct rpr0521_data *ps_data = dev_get_drvdata(dev);
@@ -1098,6 +1025,79 @@ static int rpr_ps_enable_set(struct sensors_classdev *sensors_cdev,
 	if (err < 0)
 		return err;
 	return 0;
+}
+
+static unsigned int rpr_ps_calibration(struct rpr0521_data *ps_data)
+{
+	int array[SIZE_ARRAY_PS_CALIBRATE];
+	int i = 0, max = 0,index = 0, j = 0;
+	int frequency;
+
+	printk(KERN_INFO "%s STARTING CALIBRATION ... (15 seconds)", __func__);
+
+	for (j = 0; j < SIZE_ARRAY_PS_CALIBRATE; j++)
+	{
+		array[j] = rpr0521_get_ps_reading(ps_data);
+		msleep(50);
+	}
+
+	while(i < SIZE_ARRAY_PS_CALIBRATE - 1)	{
+ 
+		frequency = 1;
+ 
+		while(array[i] == array[i+1])	{
+ 
+			frequency++;
+			i++;
+		}
+ 
+		if(max < frequency)	{
+ 
+			max = frequency;
+			index = i;
+		}
+ 
+		i++;
+	}
+
+	return array[index];
+}
+
+
+static ssize_t rpr_ps_calibrate_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+    int32_t ps_thd_l1_reg, ps_thd_l2_reg;
+	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
+    mutex_lock(&ps_data->io_lock);
+    ps_thd_l1_reg = i2c_smbus_read_byte_data(ps_data->client,RPR_THDL1_PS_REG);
+    if(ps_thd_l1_reg < 0)
+	{
+		printk(KERN_ERR "%s fail, err=0x%x", __func__, ps_thd_l1_reg);
+		return -EINVAL;
+	}
+    ps_thd_l2_reg = i2c_smbus_read_byte_data(ps_data->client,RPR_THDL2_PS_REG);
+    if(ps_thd_l2_reg < 0)
+	{
+		printk(KERN_ERR "%s fail, err=0x%x", __func__, ps_thd_l2_reg);
+		return -EINVAL;
+	}
+    mutex_unlock(&ps_data->io_lock);
+	ps_thd_l1_reg = ps_thd_l1_reg<<8 | ps_thd_l2_reg;
+    return scnprintf(buf, PAGE_SIZE, "%d\n", ps_thd_l1_reg);
+}
+
+static ssize_t rpr_ps_calibrate_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+{
+	struct rpr0521_data *ps_data =  dev_get_drvdata(dev);
+	unsigned int value = 0;
+	
+	value = rpr_ps_calibration(ps_data);
+
+    mutex_lock(&ps_data->io_lock);
+    rpr0521_set_ps_thd_l(ps_data, value);
+    mutex_unlock(&ps_data->io_lock);
+	printk(KERN_INFO "%s FINISH CALIBRATION", __func__);
+    return value;
 }
 
 static ssize_t rpr_ps_enable_show(struct device *dev, struct device_attribute *attr, char *buf)
@@ -1195,7 +1195,9 @@ static ssize_t rpr_ps_distance_show(struct device *dev, struct device_attribute 
 	printk(KERN_INFO "%s: RPR0521 lower threshold - %d", __func__, ps_data->ps_thd_l);
 	printk(KERN_INFO "%s: RPR0521 distance - %d", __func__, ret);
 
-    dist = (ret>ps_data->ps_thd_l)?0:1;
+    // dist = ((ret < ps_data->ps_thd_h) && (ret > ps_data->ps_thd_l))?0:1;
+	if ((ret < ps_data->ps_thd_h) && (ret > ps_data->ps_thd_l)) dist = 0;
+	else dist = 1;
 
     ps_data->ps_distance_last = dist;
 	input_report_abs(ps_data->ps_input_dev, ABS_DISTANCE, dist);
@@ -1445,6 +1447,7 @@ static struct attribute_group rpr_als_attribute_group = {
 };
 
 
+static struct device_attribute ps_calibrate_attribute = __ATTR(calibrate,0664,rpr_ps_calibrate_show,rpr_ps_calibrate_store);
 static struct device_attribute ps_enable_attribute = __ATTR(enable,0664,rpr_ps_enable_show,rpr_ps_enable_store);
 static struct device_attribute ps_distance_attribute = __ATTR(distance,0664,rpr_ps_distance_show, rpr_ps_distance_store);
 static struct device_attribute ps_offset_attribute = __ATTR(offset,0664,rpr_ps_offset_show, rpr_ps_offset_store);
@@ -1457,6 +1460,7 @@ static struct device_attribute all_reg_attribute = __ATTR(allreg, 0444, rpr_all_
 
 static struct attribute *rpr_ps_attrs [] =
 {
+	&ps_calibrate_attribute.attr,
     &ps_enable_attribute.attr,
     &ps_distance_attribute.attr,
 	&ps_offset_attribute.attr,
@@ -1515,31 +1519,25 @@ static void rpr_ps_work_func(struct work_struct *work)
 {
 	struct rpr0521_data *ps_data = container_of(work, struct rpr0521_data, rpr_ps_work);
 	uint32_t reading;
-	int32_t near_far_state = 0;
+	int32_t near_far_state;
     mutex_lock(&ps_data->io_lock);
 
 	reading = rpr0521_get_ps_reading(ps_data);
-
 	printk(KERN_INFO "%s: RPR0521 uper threshold - %d", __func__, ps_data->ps_thd_h);
 	printk(KERN_INFO "%s: RPR0521 lower threshold - %d", __func__, ps_data->ps_thd_l);
 	printk(KERN_INFO "%s: RPR0521 distance - %d", __func__, reading);
-	printk(KERN_INFO "%s: RPR0521 threshold low - %d", __func__, ps_data->curr_number_thd_l);
-	printk(KERN_INFO "%s: RPR0521 offset - %d", __func__, ps_data->ps_offset);
 
-	if (reading > ps_data->ps_thd_l)
-	{
-		msleep(ps_data->ps_delta_time);
-		reading = rpr0521_get_ps_reading(ps_data);
-		if (reading > ps_data->ps_thd_l)
-		near_far_state = 1;
-	} else near_far_state = 0;
+	// near_far_state = ((reading<ps_data->ps_thd_h) && (reading > ps_data->ps_thd_l))?0:1;
+
+	if ((reading < ps_data->ps_thd_h) && (reading > ps_data->ps_thd_l)) near_far_state = 0;
+	else near_far_state = 1;
 
 	if(ps_data->ps_distance_last != near_far_state)
 	{
 		ps_data->ps_distance_last = near_far_state;
-		input_report_abs(ps_data->ps_input_dev, ABS_DISTANCE, near_far_state);
+		input_report_abs(ps_data->ps_input_dev, ABS_DISTANCE, reading /* near_far_state */);
 		input_sync(ps_data->ps_input_dev);
-		wake_lock_timeout(&ps_data->ps_wakelock, 10*HZ);
+		wake_lock_timeout(&ps_data->ps_wakelock, 3*HZ);
 #ifdef RPR_DEBUG_PRINTF
 		printk(KERN_INFO "%s: ps input event %d cm, ps code = %d\n",__func__, near_far_state, reading);
 #endif
@@ -1805,23 +1803,6 @@ static int rpr0521_parse_dt(struct device *dev,
 		return rc;
 	}
 
-	rc = of_property_read_u32(np, "rpr,ps-delta-time", &temp_val);
-	if (!rc)
-		pdata->ps_delta_time = (u16)temp_val;
-	else {
-		dev_err(dev, "Unable to read ps-thdl\n");
-		return rc;
-	}
-
-	rc = of_property_read_u32(np, "rpr,ps-offset", &temp_val);
-	if (!rc)
-		pdata->ps_offset = (u16)temp_val;
-	else {
-		dev_err(dev, "Unable to read ps-thdl\n");
-		return rc;
-	}
-	
-
 	pdata->use_fir = of_property_read_bool(np, "rpr,use-fir");
 
 	return 0;
@@ -1892,9 +1873,6 @@ static int rpr0521_probe(struct i2c_client *client,
 	ps_data->int_pin = plat_data->int_pin;
 	ps_data->use_fir = plat_data->use_fir;
 	ps_data->pdata = plat_data;
-
-	ps_data->prev_number = ps_data->ps_thd_l;
-	ps_data->curr_number_thd_l = ps_data->ps_thd_l;
 
 	if (ps_data->als_transmittance == 0) {
 		dev_err(&client->dev,
@@ -1998,7 +1976,7 @@ static int rpr0521_probe(struct i2c_client *client,
 
 	dev_dbg(&client->dev, "%s: probe successfully", __func__);
 	printk(KERN_INFO "%s: Driver RPR0521 probe successfully\n", __func__);
-	sensors_classdev_unregister(&ps_data->als_cdev);
+	// sensors_classdev_unregister(&ps_data->als_cdev);
 	return 0;
 
 err_init_all_setting:
@@ -2098,7 +2076,7 @@ static void __exit rpr0521_exit(void)
 
 module_init(rpr0521_init);
 module_exit(rpr0521_exit);
-MODULE_AUTHOR("Lex Hsieh <lex_hsieh@sitronix.com.tw> & Le Phuong Nam <le.phuong.nam@styl.solutions>");
-MODULE_DESCRIPTION("Rohm rpr0521 Proximity Sensor driver");
+MODULE_AUTHOR("Lex Hsieh <lex_hsieh@sitronix.com.tw>");
+MODULE_DESCRIPTION("Sensortek rpr0521 Proximity Sensor driver");
 MODULE_LICENSE("GPL");
 MODULE_VERSION(DRIVER_VERSION);
