@@ -671,10 +671,15 @@ static unsigned int rpr0521_calibrate(struct rpr0521_data* ps_data)
 		i++;
 	} 
 
-	if (abs(temp - a[index]) <= 0) ps_data->ps_offset = 10;
+	/* if (abs(temp - a[index]) <= 0) ps_data->ps_offset = 10;
 	else if (abs(temp - a[index]) < 20) ps_data->ps_offset = 30;
 	else if (abs(temp - a[index]) < 40) ps_data->ps_offset = 50;
-	else ps_data->ps_offset = abs(temp - a[index])/*  + 5 */;
+	else ps_data->ps_offset = abs(temp - a[index]); */
+
+	if (abs(temp - a[index]) <= 20) ps_data->ps_offset = 20;
+	else if (abs(temp - a[index]) <= 40) ps_data->ps_offset = 40;
+	else if (abs(temp - a[index]) <= 50) ps_data->ps_offset = 50;
+	else ps_data->ps_offset = 50;
 
 	return a[index];
 }
