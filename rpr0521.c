@@ -50,7 +50,7 @@
 #include <linux/of_gpio.h>
 #endif
 
-#define DRIVER_VERSION  "0.2.1"
+#define DRIVER_VERSION  "0.4.0"
 
 /* Driver Settings */
 #define CONFIG_RPR_PS_ALS_USE_CHANGE_THRESHOLD
@@ -59,7 +59,7 @@
 #endif	/* #ifdef CONFIG_RPR_PS_ALS_USE_CHANGE_THRESHOLD */
 #define RPR_INT_PS_MODE			1	/* 1, 2, or 3	*/
 #define RPR_POLL_PS
-#define RPR_POLL_ALS		/* ALS interrupt is valid only when RPR_PS_INT_MODE = 1	or 4*/
+#define RPR_POLL_ALS		/* ALS interrupt is valid only when RPR_INT_PS_MODE = 1	or 4*/
 
 /* Define Register Map */
 #define RPR_SYS_CTL_REG			0x40
@@ -177,6 +177,8 @@
 #define RPR0521_MANUFACT_ID	0xE0
 #define RPR0521_ARRAY_CALIBRATION	50
 
+#define RPR0521_ALS_MAX_OUTRANGE_LUX		30000
+
 static struct sensors_classdev sensors_light_cdev = {
 	.name = "rpr0521-light",
 	.vendor = "ROHM-Semiconductor",
@@ -203,7 +205,7 @@ static struct sensors_classdev sensors_proximity_cdev = {
 	.handle = SENSORS_PROXIMITY_HANDLE,
 	.type = SENSOR_TYPE_PROXIMITY,
 	.max_range = "10.0",
-	.resolution = "1.0",
+	.resolution = "10.0",
 	.sensor_power = "3",
 	.min_delay = 0,
 	.fifo_reserved_event_count = 0,
@@ -234,6 +236,9 @@ struct rpr0521_platform_data {
 	uint32_t int_flags;
 	bool use_fir;
 	uint8_t ps_offset;
+	uint16_t als_thd_h;
+	bool als_use_filter;
+	bool als_on;
 };
 
 struct rpr0521_data {
@@ -277,7 +282,16 @@ struct rpr0521_data {
 	unsigned int prev_number;
 	unsigned int curr_number_thd_l;
 	int ps_delta_time;
+	uint16_t als_thd_h;
+	bool als_use_filter;
+	bool als_on;
 };
+
+/* parameter for als calculation */
+#define COEFFICIENT               (4)
+const int32_t data1_coefficient[COEFFICIENT] = { 192, 141, 127, 117 };
+const int32_t data2_coefficient[COEFFICIENT] = { 316, 108, 86, 74 };
+const int32_t judge_coefficient[COEFFICIENT] = { 29, 65, 85, 158 };
 
 #if( !defined(CONFIG_RPR_PS_ALS_USE_CHANGE_THRESHOLD))
 static uint32_t lux_threshold_table[] =
@@ -306,15 +320,42 @@ static int32_t rpr0521_set_als_thd_l(struct rpr0521_data *ps_data, uint16_t thd_
 static int32_t rpr0521_set_als_thd_h(struct rpr0521_data *ps_data, uint16_t thd_h);
 static unsigned int rpr0521_calibrate(struct rpr0521_data* ps_data);	
 static int rpr0521_device_ctl(struct rpr0521_data *ps_data, bool enable);
-//static int32_t rpr0521_set_ps_aoffset(struct rpr0521_data *ps_data, uint16_t offset);
 
 inline uint32_t rpr_alscode2lux(struct rpr0521_data *ps_data, uint32_t alscode)
 {
-	alscode/=1000;
-	alscode += ((alscode<<7)+(alscode<<3)+(alscode>>1));
-    alscode<<=3;
-    alscode/=ps_data->als_transmittance;
-	return alscode;
+	if(!ps_data->als_use_filter) return alscode;
+	else {
+#define RPR0521_ALS_LEVEL_NUM 176
+		u16 als_value[RPR0521_ALS_LEVEL_NUM] = {
+			0, 25, 50, 75, 100, 125, 150, 175, 200, 225, 250, 275, 300, 325, 350, 375, 400, 425, 450, 475, 500, 525, 550, 575, 600, 625, 
+			650, 675, 700, 725, 750, 775, 800, 825, 850, 875, 900, 925, 950, 975, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000, 
+			2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900, 3000, 3100, 3200, 3300, 3400, 3500, 3600, 3700, 3800, 3900, 4000, 4100, 4200, 4300, 4400, 4500, 
+			4600, 4700, 4800, 4900, 5000, 5100, 5200, 5300, 5400, 5500, 5600, 5700, 5800, 5900, 6000, 6100, 6200, 6300, 6400, 6500, 6600, 6700, 6800, 6900, 7000, 
+			7100, 7200, 7300, 7400, 7500, 7600, 7700, 7800, 7900, 8000, 8100, 8200, 8300, 8400, 8500, 8600, 8700, 8800, 8900, 9000, 9100, 9200, 9300, 9400, 9500, 
+			9600, 9700, 9800, 9900, 10000, 10250, 10500, 10750, 11000, 11250, 11500, 11750, 12000, 12250, 12500, 12750, 13000, 13250, 13500, 13750, 14000, 14250, 
+			14500, 14750, 15000, 15500, 16000, 16500, 17000, 17500, 18000, 18500, 19000, 19500, 20000, 20500, 21000, 21500, 22000, 22500, 23000, 23500, 24000, 
+			24500, 25000, 26000, 27000, 28000, 29000, 30000
+		};
+		u8 idx;
+		u8 index_temp;
+
+		if (alscode == 0) return alscode;
+		else if (alscode < 1000) index_temp = 1;
+		else if (alscode < 5000) index_temp = 40;
+		else if (alscode < 10000) index_temp = 80;
+		else if (alscode < 15000) index_temp = 130;
+		else index_temp = 150;
+
+		for (idx = index_temp; idx < RPR0521_ALS_LEVEL_NUM; idx++) {
+			if (alscode < als_value[idx])
+				break;
+		}
+		if (idx >= RPR0521_ALS_LEVEL_NUM) {
+			idx = RPR0521_ALS_LEVEL_NUM - 1;
+		}
+
+		return als_value[idx];
+	}
 }
 
 inline uint32_t rpr_lux2alscode(struct rpr0521_data *ps_data, uint32_t lux)
@@ -390,6 +431,7 @@ static int32_t rpr0521_init_all_reg(struct rpr0521_data *ps_data, struct rpr0521
 	ps_data->ps_thd_h = plat_data->ps_thd_h;
 	ps_data->ps_thd_l = plat_data->ps_thd_l;
 	ps_data->ps_offset = plat_data->ps_offset;
+	ps_data->als_thd_h = plat_data->als_thd_h;
 
 	w_reg = plat_data->psctrl_reg;
     ret = i2c_smbus_write_byte_data(ps_data->client, RPR_PSCTRL_REG, w_reg);
@@ -671,15 +713,9 @@ static unsigned int rpr0521_calibrate(struct rpr0521_data* ps_data)
 		i++;
 	} 
 
-	/* if (abs(temp - a[index]) <= 0) ps_data->ps_offset = 10;
-	else if (abs(temp - a[index]) < 20) ps_data->ps_offset = 30;
-	else if (abs(temp - a[index]) < 40) ps_data->ps_offset = 50;
-	else ps_data->ps_offset = abs(temp - a[index]); */
-
 	if (abs(temp - a[index]) <= 20) ps_data->ps_offset = 20;
 	else if (abs(temp - a[index]) <= 40) ps_data->ps_offset = 40;
-	else if (abs(temp - a[index]) <= 50) ps_data->ps_offset = 50;
-	else ps_data->ps_offset = 50;
+	else ps_data->ps_offset = 45;
 
 	return a[index];
 }
@@ -760,20 +796,40 @@ static int32_t rpr0521_enable_als(struct rpr0521_data *ps_data, uint8_t enable)
 static inline int32_t rpr0521_filter_reading(struct rpr0521_data *ps_data,
 			int32_t word_data1, int32_t word_data2)
 {
+#define JUDGE_FIXED_COEF (100)
+#define MAXSET_CASE      (4)
+
 	int32_t word_data;
-	word_data = 0;
+	unsigned char set_case;
+
 	if (word_data1 <= 0) word_data = 0;
 	else
 	{
 		int32_t data = 0;
-		data = word_data2 * 1000 / word_data1;
+		data = word_data2 * JUDGE_FIXED_COEF;
 
-		if (data < 595) word_data = word_data1 * 1682 - word_data2 * 1877;
-		else if (data < 1015) word_data = word_data1 * 644 - word_data2 * 132;
-		else if (data < 1352) word_data = word_data1 * 756 - word_data2 * 243;
-		else if (data < 3053) word_data = word_data1 * 766 - word_data2 * 250;
+		if (data < (word_data1* judge_coefficient[0]))
+			set_case = 0;
+		else if (data < (word_data1 * judge_coefficient[1]))
+			set_case = 1;
+		else if (data < (word_data1 * judge_coefficient[2]))
+			set_case = 2;
+		else if (data < (word_data1 * judge_coefficient[3]))
+			set_case = 3;
+		else
+			set_case = MAXSET_CASE;
+
+		if (set_case >= MAXSET_CASE) word_data = 0;
+		else word_data = word_data1 * data1_coefficient[set_case] - word_data2 * data2_coefficient[set_case];
+
+		word_data /= JUDGE_FIXED_COEF;
+		if(word_data >= ps_data->als_thd_h) word_data = ps_data->als_thd_h;
 	}
+	
 	return word_data;
+
+#undef JUDGE_FIXED_COEF
+#undef MAXSET_CASE
 }
 
 static inline int32_t rpr0521_get_als_reading(struct rpr0521_data *ps_data)
@@ -786,7 +842,7 @@ static inline int32_t rpr0521_get_als_reading(struct rpr0521_data *ps_data)
 		printk(KERN_ERR "%s fail, err=0x%x", __func__, tmp_word_data1);
 		return tmp_word_data1;
 	}
-	word_data1 = ((tmp_word_data1 & 0xFF00) >> 8) | ((tmp_word_data1 & 0x00FF) << 8);
+	word_data1 = ((tmp_word_data1 & 0xFF00) >> 0) | ((tmp_word_data1 & 0x00FF) << 0);
 
 	tmp_word_data2 = i2c_smbus_read_word_data(ps_data->client, RPR_DATA1_ALS_REG_1);
 	if(tmp_word_data2 < 0)
@@ -794,7 +850,7 @@ static inline int32_t rpr0521_get_als_reading(struct rpr0521_data *ps_data)
 		printk(KERN_ERR "%s fail, err=0x%x", __func__, tmp_word_data2);
 		return tmp_word_data2;
 	}
-	word_data2 = ((tmp_word_data2 & 0xFF00) >> 8) | ((tmp_word_data2 & 0x00FF) << 8) ;
+	word_data2 = ((tmp_word_data2 & 0xFF00) >> 0) | ((tmp_word_data2 & 0x00FF) << 0) ;
 
 	word_data = rpr0521_filter_reading(ps_data, word_data1, word_data2);
 
@@ -1196,10 +1252,6 @@ static ssize_t rpr_ps_distance_show(struct device *dev, struct device_attribute 
     mutex_lock(&ps_data->io_lock);
    	ret = rpr0521_get_ps_reading(ps_data);
 
-	printk(KERN_INFO "%s: RPR0521 uper threshold - %d", __func__, ps_data->ps_thd_h);
-	printk(KERN_INFO "%s: RPR0521 lower threshold - %d", __func__, ps_data->ps_thd_l);
-	printk(KERN_INFO "%s: RPR0521 distance - %d", __func__, ret);
-
     dist = (ret>ps_data->ps_thd_l)?0:1;
 
     ps_data->ps_distance_last = dist;
@@ -1520,24 +1572,18 @@ static void rpr_ps_work_func(struct work_struct *work)
 {
 	struct rpr0521_data *ps_data = container_of(work, struct rpr0521_data, rpr_ps_work);
 	uint32_t reading;
-	int32_t near_far_state = 0;
+	int32_t near_far_state = 1;
     mutex_lock(&ps_data->io_lock);
 
 	reading = rpr0521_get_ps_reading(ps_data);
-
-	printk(KERN_INFO "%s: RPR0521 uper threshold - %d", __func__, ps_data->ps_thd_h);
-	printk(KERN_INFO "%s: RPR0521 lower threshold - %d", __func__, ps_data->ps_thd_l);
-	printk(KERN_INFO "%s: RPR0521 distance - %d", __func__, reading);
-	printk(KERN_INFO "%s: RPR0521 threshold low - %d", __func__, ps_data->curr_number_thd_l);
-	printk(KERN_INFO "%s: RPR0521 offset - %d", __func__, ps_data->ps_offset);
 
 	if (reading > ps_data->ps_thd_l)
 	{
 		msleep(ps_data->ps_delta_time);
 		reading = rpr0521_get_ps_reading(ps_data);
 		if (reading > ps_data->ps_thd_l)
-		near_far_state = 1;
-	} else near_far_state = 0;
+		near_far_state = 0;
+	} else near_far_state = 1;
 
 	if(ps_data->ps_distance_last != near_far_state)
 	{
@@ -1826,8 +1872,19 @@ static int rpr0521_parse_dt(struct device *dev,
 		return rc;
 	}
 	
-
 	pdata->use_fir = of_property_read_bool(np, "rpr,use-fir");
+
+	pdata->als_use_filter = of_property_read_bool(np, "rpr,als-filter");
+
+	pdata->als_on = of_property_read_bool(np, "rpr,als-on");
+
+	rc = of_property_read_u32(np, "rpr,als-max", &temp_val);
+	if (!rc)
+		pdata->als_thd_h = ((u16)temp_val) > RPR0521_ALS_MAX_OUTRANGE_LUX ? RPR0521_ALS_MAX_OUTRANGE_LUX : ((u16)temp_val);
+	else {
+		dev_err(dev, "Unable to read ps-thdh\n");
+		return rc;
+	}
 
 	return 0;
 }
@@ -1845,7 +1902,7 @@ static int rpr0521_probe(struct i2c_client *client,
     int err = -ENODEV;
     struct rpr0521_data *ps_data;
 	struct rpr0521_platform_data *plat_data;
-    printk(KERN_INFO "%s: driver version = %s\n", __func__, DRIVER_VERSION);
+    // printk(KERN_INFO "%s: driver version = %s\n", __func__, DRIVER_VERSION);
 
     if (!i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_BYTE_DATA))
     {
@@ -1881,10 +1938,11 @@ static int rpr0521_probe(struct i2c_client *client,
 		}
 
 		err = rpr0521_parse_dt(&client->dev, plat_data);
-		dev_err(&client->dev,
-			"%s: rpr0521_parse_dt ret=%d\n", __func__, err);
 		if (err)
+		{
+			dev_err(&client->dev, "%s: rpr0521_parse_dt ret=%d\n", __func__, err);
 			return err;
+		}
 	} else
 		plat_data = client->dev.platform_data;
 
@@ -1896,6 +1954,8 @@ static int rpr0521_probe(struct i2c_client *client,
 	ps_data->als_transmittance = plat_data->transmittance;
 	ps_data->int_pin = plat_data->int_pin;
 	ps_data->use_fir = plat_data->use_fir;
+	ps_data->als_use_filter = plat_data->als_use_filter;
+	ps_data->als_on = plat_data->als_on;
 	ps_data->pdata = plat_data;
 
 	ps_data->prev_number = ps_data->ps_thd_l;
@@ -2001,9 +2061,11 @@ static int rpr0521_probe(struct i2c_client *client,
 	if (err)
 		goto err_init_all_setting;
 
-	dev_dbg(&client->dev, "%s: probe successfully", __func__);
-	printk(KERN_INFO "%s: Driver RPR0521 probe successfully\n", __func__);
-	sensors_classdev_unregister(&ps_data->als_cdev);
+	// dev_dbg(&client->dev, "%s: probe successfully", __func__);
+	printk(KERN_INFO "%s: Driver RPR0521 probe successfully - v%s\n", __func__, DRIVER_VERSION);
+	if (ps_data->als_on) printk(KERN_INFO "%s: Driver RPR0521 ALS ON\n", __func__);
+	else sensors_classdev_unregister(&ps_data->als_cdev);
+
 	return 0;
 
 err_init_all_setting:
@@ -2107,3 +2169,4 @@ MODULE_AUTHOR("Lex Hsieh <lex_hsieh@sitronix.com.tw> & Le Phuong Nam <le.phuong.
 MODULE_DESCRIPTION("Rohm rpr0521 Proximity Sensor driver");
 MODULE_LICENSE("GPL");
 MODULE_VERSION(DRIVER_VERSION);
+

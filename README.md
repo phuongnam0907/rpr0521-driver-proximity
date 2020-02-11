@@ -23,15 +23,17 @@
 		rpr,transmittance = <1000>;
 		rpr,state-reg = <0x08>;
 		rpr,psctrl-reg = <0x20>;
-		rpr,alsctrl-reg = <0x02>;
+		rpr,alsctrl-reg = <0x02>;	//default:  0x02 - gain0 = 1; gain1 = 1
 		rpr,ps-thdh = <4096>;
 		rpr,ps-thdl = <2800>;
 		rpr,ps-delta-time = <10>;
 		rpr,ps-offset = <10>;
 		// rpr,use-fir;
+		// rpr,als-filter;		// uncomment this line to turn on filter
+		rpr,als-max = <30000>;		//default: max = 30000
+		// rpr,als-on;			// uncomment this line to turn on Ambient Light
 	};
 };
-
 ```
 
 2. Kconfig
